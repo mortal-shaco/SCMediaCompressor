@@ -1,0 +1,5 @@
+platform :ios, '15.0'
+source 'https://cdn.cocoapods.org'
+target 'SCMediaCompressorDemo' do
+  pod 'SCMediaCompressor', :path => '..', :modular_headers => true
+end

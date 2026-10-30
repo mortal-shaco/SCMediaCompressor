@@ -1,0 +1,411 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		064872D3BFCC1A7B439ED12D /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E1487EC84520CF34D75E6D74 /* Foundation.framework */; };
+		2029D0608B09DCD758FD0E23 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 4D3543E589DFEC801200C19C /* main.m */; };
+		2E377F5E82109C963BA042CD /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2783CDBBBD398378C92B7A97 /* UIKit.framework */; };
+		535D6D2B16C6ADDF7293722B /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D429CE8E307E589CE815B7F1 /* ImageIO.framework */; };
+		58D9B1B7A9427BEB30985D41 /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD4F4E71875F1DC5E2A1DA16 /* Photos.framework */; };
+		69DA912BB9FCC81ACD86C2F5 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4331C6C6EC6BA265224F9E3A /* AVFoundation.framework */; };
+		6C35360A9A85C38AF18FC5AC /* PhotosUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5443B72F2EB2B4ADF31AA830 /* PhotosUI.framework */; };
+		73FA9F8BB99B81B3FE870DA4 /* SCAppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D2A16796B395471DF3C7EA0 /* SCAppDelegate.m */; };
+		908AA5B2BB3B7C72EA809FCE /* libPods-SCMediaCompressorDemo.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 43510718C5F7228AEE02794D /* libPods-SCMediaCompressorDemo.a */; };
+		9C0032081A5F5CC750EE4291 /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0BC1868BAA098D1001A52993 /* AVKit.framework */; };
+		EFE16DB0358F775E6FD67039 /* SCSceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 691BB41E3EDF8B51E78C6A94 /* SCSceneDelegate.m */; };
+		FC9C4354596145CB3425F379 /* SCDemoViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 94360BAB0A4CDEE822EA3B6F /* SCDemoViewController.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0BC1868BAA098D1001A52993 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/AVKit.framework; sourceTree = DEVELOPER_DIR; };
+		0D2A16796B395471DF3C7EA0 /* SCAppDelegate.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = SCAppDelegate.m; sourceTree = "<group>"; };
+		2783CDBBBD398378C92B7A97 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/UIKit.framework; sourceTree = DEVELOPER_DIR; };
+		4331C6C6EC6BA265224F9E3A /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/AVFoundation.framework; sourceTree = DEVELOPER_DIR; };
+		43510718C5F7228AEE02794D /* libPods-SCMediaCompressorDemo.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-SCMediaCompressorDemo.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		493D2DD7983D971301847C00 /* Pods-SCMediaCompressorDemo.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SCMediaCompressorDemo.debug.xcconfig"; path = "Target Support Files/Pods-SCMediaCompressorDemo/Pods-SCMediaCompressorDemo.debug.xcconfig"; sourceTree = "<group>"; };
+		4AC0BCF54D8F84C24E8D62FD /* SCDemoViewController.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = SCDemoViewController.h; sourceTree = "<group>"; };
+		4D3543E589DFEC801200C19C /* main.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		50CD18948748EF27FC1AD918 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		5443B72F2EB2B4ADF31AA830 /* PhotosUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PhotosUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/PhotosUI.framework; sourceTree = DEVELOPER_DIR; };
+		618363F303F9C2B67786EE4B /* SCMediaCompressorDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SCMediaCompressorDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		691BB41E3EDF8B51E78C6A94 /* SCSceneDelegate.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = SCSceneDelegate.m; sourceTree = "<group>"; };
+		94360BAB0A4CDEE822EA3B6F /* SCDemoViewController.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = SCDemoViewController.m; sourceTree = "<group>"; };
+		D429CE8E307E589CE815B7F1 /* ImageIO.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ImageIO.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/ImageIO.framework; sourceTree = DEVELOPER_DIR; };
+		DD4F4E71875F1DC5E2A1DA16 /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Photos.framework; sourceTree = DEVELOPER_DIR; };
+		E0AEBEFB6298F31EFDAADC11 /* Pods-SCMediaCompressorDemo.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SCMediaCompressorDemo.release.xcconfig"; path = "Target Support Files/Pods-SCMediaCompressorDemo/Pods-SCMediaCompressorDemo.release.xcconfig"; sourceTree = "<group>"; };
+		E1487EC84520CF34D75E6D74 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A7384E6636027B02F335B4F0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				064872D3BFCC1A7B439ED12D /* Foundation.framework in Frameworks */,
+				2E377F5E82109C963BA042CD /* UIKit.framework in Frameworks */,
+				58D9B1B7A9427BEB30985D41 /* Photos.framework in Frameworks */,
+				6C35360A9A85C38AF18FC5AC /* PhotosUI.framework in Frameworks */,
+				69DA912BB9FCC81ACD86C2F5 /* AVFoundation.framework in Frameworks */,
+				9C0032081A5F5CC750EE4291 /* AVKit.framework in Frameworks */,
+				535D6D2B16C6ADDF7293722B /* ImageIO.framework in Frameworks */,
+				908AA5B2BB3B7C72EA809FCE /* libPods-SCMediaCompressorDemo.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		18ED68F18331E7D717AB33DF = {
+			isa = PBXGroup;
+			children = (
+				D91AF46FC2DB8822CF726980 /* Products */,
+				84E73F8969F6EE4CA21289A8 /* Frameworks */,
+				3D4FFAE0C2CB048C4E7BECA4 /* SCMediaCompressorDemo */,
+				8631C361C7988B17072A2254 /* Pods */,
+			);
+			sourceTree = "<group>";
+		};
+		3D4FFAE0C2CB048C4E7BECA4 /* SCMediaCompressorDemo */ = {
+			isa = PBXGroup;
+			children = (
+				50CD18948748EF27FC1AD918 /* Info.plist */,
+				0D2A16796B395471DF3C7EA0 /* SCAppDelegate.m */,
+				4AC0BCF54D8F84C24E8D62FD /* SCDemoViewController.h */,
+				94360BAB0A4CDEE822EA3B6F /* SCDemoViewController.m */,
+				691BB41E3EDF8B51E78C6A94 /* SCSceneDelegate.m */,
+				4D3543E589DFEC801200C19C /* main.m */,
+			);
+			path = SCMediaCompressorDemo;
+			sourceTree = "<group>";
+		};
+		84E73F8969F6EE4CA21289A8 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				AEAD86655219C5E288492596 /* iOS */,
+				43510718C5F7228AEE02794D /* libPods-SCMediaCompressorDemo.a */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		8631C361C7988B17072A2254 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				E0AEBEFB6298F31EFDAADC11 /* Pods-SCMediaCompressorDemo.release.xcconfig */,
+				493D2DD7983D971301847C00 /* Pods-SCMediaCompressorDemo.debug.xcconfig */,
+			);
+			path = Pods;
+			sourceTree = "<group>";
+		};
+		AEAD86655219C5E288492596 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				E1487EC84520CF34D75E6D74 /* Foundation.framework */,
+				2783CDBBBD398378C92B7A97 /* UIKit.framework */,
+				DD4F4E71875F1DC5E2A1DA16 /* Photos.framework */,
+				5443B72F2EB2B4ADF31AA830 /* PhotosUI.framework */,
+				4331C6C6EC6BA265224F9E3A /* AVFoundation.framework */,
+				0BC1868BAA098D1001A52993 /* AVKit.framework */,
+				D429CE8E307E589CE815B7F1 /* ImageIO.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		D91AF46FC2DB8822CF726980 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				618363F303F9C2B67786EE4B /* SCMediaCompressorDemo.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5DBA2511DE7F8EB747F9EBDE /* SCMediaCompressorDemo */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BE7BF3BDA9BB7510D0300424 /* Build configuration list for PBXNativeTarget "SCMediaCompressorDemo" */;
+			buildPhases = (
+				AC85A427472DA9F8C80AB31B /* [CP] Check Pods Manifest.lock */,
+				287ECB7540AE4497CE9D6B10 /* Sources */,
+				A7384E6636027B02F335B4F0 /* Frameworks */,
+				F2F3EBC6F6F3C7BA1809D735 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SCMediaCompressorDemo;
+			productName = SCMediaCompressorDemo;
+			productReference = 618363F303F9C2B67786EE4B /* SCMediaCompressorDemo.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9834ACB40211A995AFD9AAF8 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					5DBA2511DE7F8EB747F9EBDE = {
+						DevelopmentTeam = X5733X6NCT;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 999AA1B1322BD2BC7870333E /* Build configuration list for PBXProject "SCMediaCompressorDemo" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 18ED68F18331E7D717AB33DF;
+			productRefGroup = D91AF46FC2DB8822CF726980 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5DBA2511DE7F8EB747F9EBDE /* SCMediaCompressorDemo */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F2F3EBC6F6F3C7BA1809D735 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AC85A427472DA9F8C80AB31B /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-SCMediaCompressorDemo-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		287ECB7540AE4497CE9D6B10 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				73FA9F8BB99B81B3FE870DA4 /* SCAppDelegate.m in Sources */,
+				FC9C4354596145CB3425F379 /* SCDemoViewController.m in Sources */,
+				EFE16DB0358F775E6FD67039 /* SCSceneDelegate.m in Sources */,
+				2029D0608B09DCD758FD0E23 /* main.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2613E1B9352617ADBCCBB684 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = E0AEBEFB6298F31EFDAADC11 /* Pods-SCMediaCompressorDemo.release.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X5733X6NCT;
+				INFOPLIST_FILE = SCMediaCompressorDemo/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.mortal-shaco.SCMediaCompressorDemo";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		95F37CDA4D6FB3F95741580D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		9CBB678B7B9B7B3E5A5C2181 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 493D2DD7983D971301847C00 /* Pods-SCMediaCompressorDemo.debug.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X5733X6NCT;
+				INFOPLIST_FILE = SCMediaCompressorDemo/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.mortal-shaco.SCMediaCompressorDemo";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E171260BAABA9A9464DDAB9C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		999AA1B1322BD2BC7870333E /* Build configuration list for PBXProject "SCMediaCompressorDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E171260BAABA9A9464DDAB9C /* Debug */,
+				95F37CDA4D6FB3F95741580D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BE7BF3BDA9BB7510D0300424 /* Build configuration list for PBXNativeTarget "SCMediaCompressorDemo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2613E1B9352617ADBCCBB684 /* Release */,
+				9CBB678B7B9B7B3E5A5C2181 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9834ACB40211A995AFD9AAF8 /* Project object */;
+}

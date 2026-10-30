@@ -1,0 +1,16 @@
+PODS:
+  - SCMediaCompressor (1.0.0)
+
+DEPENDENCIES:
+  - SCMediaCompressor (from `..`)
+
+EXTERNAL SOURCES:
+  SCMediaCompressor:
+    :path: ".."
+
+SPEC CHECKSUMS:
+  SCMediaCompressor: 2422c64c35fb9d4d1438b9df9e6b0132523ce92d
+
+PODFILE CHECKSUM: 855cdec25eb5b11c32c79e4fba0b34f82f472939
+
+COCOAPODS: 1.17.0
