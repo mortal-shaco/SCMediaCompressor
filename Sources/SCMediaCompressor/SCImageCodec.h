@@ -14,4 +14,6 @@ FOUNDATION_EXPORT NSData * _Nullable sc_Pixels(CGImageRef image);
 FOUNDATION_EXPORT CGImageRef _Nullable sc_Decode(CGImageSourceRef source, NSUInteger longestSide) CF_RETURNS_RETAINED;
 /// 使用 ImageIO 生成指定格式的图片编码数据。
 FOUNDATION_EXPORT NSData * _Nullable sc_Encode(CGImageRef image, CFStringRef type, double quality, NSDictionary * _Nullable metadata, SCImageCompressionOptions * _Nullable options);
+/// 使用 libwebp 编码同域 RGBA 并封装源 ICC，透明度不铺底。
+FOUNDATION_EXPORT NSData * _Nullable sc_EncodeWebP(CGImageRef image, NSData *pixels, double quality, SCImageCompressionOptions *options);
 NS_ASSUME_NONNULL_END

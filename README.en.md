@@ -2,11 +2,11 @@
 
 [中文](README.md) · iOS 15+ · Objective-C / Swift · MIT
 
-SCMediaCompressor compresses images, videos and Live Photos on iOS using Apple frameworks. It provides asynchronous tasks, progress, cancellation and Live Photo pairing, with no third-party runtime dependencies.
+SCMediaCompressor compresses images, videos and Live Photos on iOS using Apple frameworks and libwebp for WebP encoding. It provides asynchronous tasks, progress, cancellation and Live Photo pairing.
 
 ## Features
 
-- Images: fit within pixel bounds, normalize orientation, handle transparency, and produce JPEG, PNG or optional HEIC.
+- Images: fit within pixel bounds, normalize orientation, handle transparency, and produce JPEG, PNG, HEIC or WebP.
 - Videos: H.264 / MP4 / SDR by default, with configurable dimensions, frame rate, bitrate, trimming, audio mixing and custom rendering.
 - Live Photos: compress both resources and return paired JPEG / MOV files.
 - Tasks: process media in the background and deliver high-level progress and completion on the main queue.
@@ -18,19 +18,18 @@ The host app handles media selection, iCloud downloads, permissions, uploads and
 
 Install with CocoaPods:
 
+If a newer Xcode rejects libwebp’s iOS 9 deployment target, set the Pods deployment target to iOS 15; see the [Demo post_install configuration](Demo/Podfile).
+
+WebP uses a software encoder. For Debug builds, enable compiler optimization for `libwebp` (for example, `GCC_OPTIMIZATION_LEVEL = 2`); `-O0` can greatly increase encoding time. Merge only the libwebp Debug optimization branch from the [Demo post_install configuration](Demo/Podfile) into your app’s existing post_install, run `pod install`, then rebuild. The setting targets the libwebp dependency; optimization configured for the compressor pod does not propagate to its dependencies.
+
+Install 1.1.0 from its fixed Git tag:
+
 ```ruby
 platform :ios, '15.0'
-pod 'SCMediaCompressor', '~> 1.0', :modular_headers => true
+pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.0', :modular_headers => true
 ```
 
-If your local or CDN index does not yet list the version, install the fixed Git tag directly:
-
-```ruby
-platform :ios, '15.0'
-pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.0.0', :modular_headers => true
-```
-
-To follow the latest public code, replace `:tag => '1.0.0'` with `:branch => 'main'`. Run `pod install`, then open your project's `.xcworkspace`.
+To follow the latest public code, replace `:tag => '1.1.0'` with `:branch => 'main'`. Run `pod install`, then open your project's `.xcworkspace`.
 
 ```objc
 #import <SCMediaCompressor/SCMediaCompressor.h>
@@ -40,7 +39,7 @@ To follow the latest public code, replace `:tag => '1.0.0'` with `:branch => 'ma
 import SCMediaCompressor
 ```
 
-Basic features require iOS 15 or later. HDR image preservation also depends on system codec support; cross-format HDR conversion and HDR UIImage resizing require iOS 18 or later.
+Basic features require iOS 15 or later. When HDR is enabled, preservation also depends on system codecs; HDR-preserving cross-format conversion and HDR UIImage resizing require iOS 18 or later. Ordinary images with an explicit format can output that format in SDR when HDR support is unavailable.
 
 ## Compress an image
 
@@ -87,16 +86,44 @@ For a UIImage, use `sc_compressImage:options:progress:completion:`. `SCImageComp
 
 - `maximumSize`: defaults to a `1920 × 1920` pixel box. Preserves aspect ratio and never enlarges small inputs. A zero axis in the options API leaves that axis unconstrained.
 - `quality`: defaults to `0.8`, in `0…1`. Controls the tradeoff between image quality and bytes, without implying a fixed perceptual quality percentage or file-size ratio.
-- `format`: Automatic, JPEG, PNG or HEIC. Automatic chooses JPEG/PNG for SDR input based on content and actual bytes. When HDR is preserved, Automatic uses HEIC; explicit JPEG and Live stills use gain-map JPEG.
+- `format`: Automatic, JPEG, PNG, HEIC or WebP. Automatic chooses JPEG/PNG for SDR input based on content and actual bytes. With HDR preservation, Automatic compares supported HEIC and gain-map JPEG candidates by fidelity eligibility and actual bytes; explicit JPEG attempts gain-map JPEG with same-format SDR compatibility, while Live stills require gain-map JPEG.
 - `backgroundColor`: the background used to flatten transparency for explicit JPEG; nil uses white. Automatic preserves transparent PNG.
-- `preservesHDR`: NO by default, converting HDR to SDR and removing gain maps. YES retains source HDR without promoting SDR. JPEG uses a gain map. Automatic selects HEIC for HDR; explicit JPEG and Live use gain-map JPEG. The format option directly selects the encoding, including SDR HEIC when HDR preservation is off. Unsupported HDR PNG or unavailable encoders fail explicitly.
+- `preservesHDR`: NO by default: output SDR and remove source HDR/gain maps. Only YES attempts to preserve source HDR, without promoting SDR. For ordinary images, an explicit format takes priority: PNG/WebP always output SDR; JPEG/HEIC attempt HDR first and use the same format in SDR when system HDR support is unavailable. A compliant original HDR file can participate in size selection. Automatic compares supported HEIC/gain-map JPEG by hard constraints, fidelity eligibility and actual bytes, failing if none works and no compliant original exists. Live keeps its shared HDR pairing requirements. Invalid input, cancellation and genuine encoding/file errors still fail explicitly.
+- `WebP`: static SDR WebP via libwebp (installed automatically by CocoaPods), preserving alpha and the source ICC profile. Uses at most five bounded encodes, measured fidelity and actual byte selection. Each axis must be at most 16383 pixels; larger output fails explicitly. Enabling HDR still produces SDR in this selected format; animated re-encoding is unsupported. Live Photo remains JPEG/MOV.
 - `preservesAnimation`: YES by default. Compliant GIF is returned unchanged with Automatic output. Animated re-encoding is unsupported. Set to NO to explicitly allow a single frame.
 
 Apps with upload limits should check the actual output size and handle it explicitly.
 
+Select WebP output:
+
+```objc
+SCImageCompressionOptions *options = [SCImageCompressionOptions new];
+options.format = SCImageFormatWebP;
+options.preservesHDR = YES; // Only YES attempts HDR; WebP outputs SDR in the selected format.
+NSData *webp = [SCImageCompressor sc_compressData:data options:options error:&error];
+```
+
+```swift
+let options = SCImageCompressionOptions()
+options.format = .webP
+options.preservesHDR = true // WebP outputs SDR with either setting.
+let webp = try SCImageCompressor.sc_compressData(data, options: options)
+```
+
+Automatically preserve HDR and select a supported output format:
+
+```swift
+let options = SCImageCompressionOptions()
+options.format = .automatic
+options.preservesHDR = true
+let result = try SCImageCompressor.sc_compressData(data, options: options)
+```
+
+Each HDR format uses its existing bounded encoding path, without extra trials to beat source bytes. Formats whose encoders are unavailable or fail to retain actual HDR are excluded. If no format works and no compliant original exists, the operation fails explicitly. Hard constraints such as alpha remain mandatory. A required conversion may still deliver an assessed best-effort result if no candidate meets fidelity. UIImage keeps an unknown original-file baseline; SDR defaults are unchanged.
+
 ### Image quality diagnostics
 
-JPEG retains best-effort output when its fidelity target is missed. A compliant original participates in size selection and wins on equality; no source-size trials are added. Read `imageQualityStatus`, `imageRequestedQuality`, `imageEffectiveQualityTarget`, and `imageFidelityScore` after completion. HEIC/HDR uses actual source-relative spatial samples. Original passthrough, unscored PNG and other unscored results are not evaluated, with a nil score. Failure/cancellation does not report fidelity success. JPEG uses at most five encodes: its first search probe shifts toward the high-quality range for stricter fidelity requests, followed by measured interval refinement, without adding size-only encodes. Successful delivery does not imply that the fidelity target was met.
+JPEG retains best-effort output when its fidelity target is missed. A compliant original participates in size selection and wins on equality; no source-size trials are added. Read `imageQualityStatus`, `imageRequestedQuality`, `imageEffectiveQualityTarget`, and `imageFidelityScore` after completion. HEIC/HDR uses actual source-relative spatial samples. Original passthrough, unscored PNG and other unscored results are not evaluated, with a nil score. Failure/cancellation does not report fidelity success. The SDR JPEG search uses at most five encodes; any failed HDR attempts are counted separately when compatibility output is needed. Its first search probe shifts toward the high-quality range for stricter fidelity requests, followed by measured interval refinement, without adding size-only encodes. Successful delivery does not imply that the fidelity target was met.
 
 Synchronous callers can also receive diagnostics through options without changing the NSData result:
 
@@ -119,7 +146,7 @@ options.performanceHandler = { performance in
 ```
 
 - `inputBytes` / `outputBytes`: actual input and delivered-image bytes. UIImage input bytes are unknown (0). Failure or cancellation sets delivered bytes to 0 and `succeeded` to false while retaining actual encoding attempts.
-- `encodingPassCount` / `encodingCountsByFormat`: ImageIO encoding/write attempts and their actual UTI groups, including discarded candidates and failed attempts. Multiple JPEG candidates are real work, not a single encode.
+- `encodingPassCount` / `encodingCountsByFormat`: ImageIO/libwebp encoding/write attempts and their actual UTI groups, including discarded candidates and failed attempts. Multiple JPEG candidates are real work, not a single encode.
 - `pairingEncodingPassCount`: Live JPEG pairing rewrites, including candidate and baseline resources. Copying an existing matching identifier does not count as encoding. MOV remuxing is not image encoding.
 - `stageDurations`: seconds for prepare (identification, decoding, resizing, reference pixels and remaining overhead), encode, evaluate (candidate decoding and existing quality checks), finish (byte selection), pair (JPEG pairing), and total. Stages do not overlap. Live image time excludes video encoding, MOV remuxing, source acquisition, and quality/performance completion callbacks.
 
@@ -231,7 +258,7 @@ Set quality per call through `SCImageCompressionOptions.quality` or an explicit 
 
 Prefer `task.outcome` for baseline/output bytes, whether the baseline was delivered, savings ratio, fidelity status, and separate image/video encode counts. UIImage and compositions without a local source file have no comparable original bytes; `outcome.baselineBytes` / `task.comparisonBytes == 0` means unknown. `usesConvertedBaseline` identifies a processed, deliverable baseline and does not independently prove a format change. Live comparison baselines are the combined final paired resources; `imageComparisonBytes` / `imageUsesConvertedBaseline` describe the image separately. `videoConversionBytes` records the first completed video conversion. `encodingPassCount` / `videoEncodingPassCount` count video only; image attempts are on `imagePerformance` or `outcome.imageEncodingPassCount`. Library errors use `SCMediaCompressorErrorDomain` and `SCMediaCompressorErrorCode`. Standalone pairing completion receives `(BOOL success, NSError *error)`; the movie header receives only writer and reader. Live pairing failures retain an actual system error in `error.userInfo[NSUnderlyingErrorKey]` when available. Cancellation keeps its existing error. ImageIO failures without an NSError report the pairing stage without inventing an underlying cause.
 
-Image quality controls SDR candidate selection. HDR/explicit HEIC starts at encoder quality `0.6 * effectiveQualityTarget`, then measures actual spatial samples. Automatic video bitrate uses `0.85 * quality` as its initial budget factor, leaving compression headroom even at the highest level; measured output samples determine fidelity. Size selection does not add bitrate reductions to beat source bytes or change the requested quality. Compression ratios vary with content. Videos default to SDR, with opt-in preservation of 10-bit HLG/PQ pixels and colors; preservation of per-frame Dolby Vision dynamic metadata is not guaranteed. HDR image/video preservation depends on the format, OS and actual encoder; unsupported requests return an error. HDR PNG is unsupported.
+Image quality controls SDR candidate selection. HDR/explicit HEIC starts at encoder quality `0.6 * effectiveQualityTarget`, then measures actual spatial samples. Automatic video bitrate uses `0.85 * quality` as its initial budget factor, leaving compression headroom even at the highest level; measured output samples determine fidelity. Size selection does not add bitrate reductions to beat source bytes or change the requested quality. Compression ratios vary with content. Videos default to SDR, with opt-in preservation of 10-bit HLG/PQ pixels and colors; preservation of per-frame Dolby Vision dynamic metadata is not guaranteed. Only enabling HDR attempts preservation, which depends on the format, OS and actual encoder. Ordinary images with explicit formats can fall back to SDR in the same format; Automatic, Live and video keep their HDR requirements and report unsupported requests explicitly. PNG/WebP do not retain HDR; explicitly selecting either format for ordinary images produces SDR.
 
 Validate representative inputs for formats, dimensions, bytes and playback. Check camera image quality, Dolby Vision and saved Live Photo playback on a real device; simulator codecs can differ.
 

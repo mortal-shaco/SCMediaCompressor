@@ -10,8 +10,8 @@ void sc_example(NSData *data, AVAsset *asset, NSURL *imageURL, NSURL *videoURL, 
     // options：图片和 Live 视频共用的按次配置，不依赖全局可写质量。
     SCImageCompressionOptions *options=[SCImageCompressionOptions new];
     options.maximumSize=CGSizeMake(1920,1920);options.quality=0.8;
-    // 直接选择输出格式；HDR 默认转 SDR，JPEG 也可通过增益图保留 HDR。
-    options.format=SCImageFormatAutomatic;options.preservesHDR=NO;
+    // 显式输出静态 WebP，保留透明度；不支持 HDR 保留，Live 仍固定 JPEG。
+    options.format=SCImageFormatWebP;options.preservesHDR=NO;
     // 质量诊断复用已有评分；回调在处理队列，更新界面需自行转到主队列。
     options.qualityAssessmentHandler=^(SCImageQualityStatus status,CGFloat requested,NSNumber *score){
         if(status==SCImageQualityStatusNotMet)NSLog(@"图片未达保真目标：quality 请求 %.2f，评分 %@，仍交付可用图片",requested,score);
@@ -58,4 +58,22 @@ void sc_example(NSData *data, AVAsset *asset, NSURL *imageURL, NSURL *videoURL, 
         // Live 共用 options 的尺寸、quality 与 preservesHDR；视频专属参数单独配置。
         // photo、movie：同一配对 ID 的 JPEG/MOV，保存结束后再删除。
     }];
+}
+
+/// 自动选择实际可保留 HDR 的合格格式；输出扩展名按真实字节识别。
+/// @param data 原始图片文件字节。
+/// @param error 所有格式均不可用时的错误。
+NSData *sc_HDRExample(NSData *data, NSError **error) {
+    SCImageCompressionOptions *options=[SCImageCompressionOptions new];
+    options.format=SCImageFormatAutomatic;options.preservesHDR=YES;
+    return [SCImageCompressor sc_compressData:data options:options error:error];
+}
+
+/// 显式 WebP 优先；HDR 偏好开启时将 HDR 输入转为 SDR WebP。
+/// @param data 原始图片文件字节。
+/// @param error 实际输入或编码错误。
+NSData *sc_WebPWithHDRExample(NSData *data, NSError **error) {
+    SCImageCompressionOptions *options=[SCImageCompressionOptions new];
+    options.format=SCImageFormatWebP;options.preservesHDR=YES;
+    return [SCImageCompressor sc_compressData:data options:options error:error];
 }

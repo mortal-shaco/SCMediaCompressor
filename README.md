@@ -2,11 +2,11 @@
 
 [English](README.en.md) · iOS 15+ · Objective-C / Swift · MIT
 
-SCMediaCompressor 是一个 iOS 图片、视频和 Live Photo 压缩库。它使用 Apple 系统框架，提供统一的异步接口、进度回调、取消操作和 Live Photo 配对，无第三方运行时依赖。
+SCMediaCompressor 是一个 iOS 图片、视频和 Live Photo 压缩库。它使用 Apple 系统框架，提供统一的异步接口、进度回调、取消操作和 Live Photo 配对，WebP 编码依赖 libwebp。
 
 ## 功能
 
-- 图片：按像素边界等比缩小，支持 JPEG、PNG 和可选 HEIC 输出，处理方向与透明背景。
+- 图片：按像素边界等比缩小，支持 JPEG、PNG、HEIC 和 WebP 输出，处理方向与透明背景。
 - 视频：默认输出 H.264 / MP4 / SDR，支持尺寸、帧率、码率、裁剪、混音及自定义渲染。
 - Live Photo：压缩静态图与视频，返回配对的 JPEG / MOV 文件。
 - 任务：后台处理，主队列交付高层进度与完成回调，可请求取消。
@@ -18,19 +18,18 @@ SCMediaCompressor 是一个 iOS 图片、视频和 Live Photo 压缩库。它使
 
 通过 CocoaPods 安装：
 
+若较新 Xcode 提示 libwebp 的 iOS 9 部署目标不受支持，将 Pods 的最低部署版本统一到 iOS 15；参见 [Demo 的 post_install 配置](Demo/Podfile)。
+
+WebP 使用软件编码。Debug 集成时请为 `libwebp` 开启编译优化（例如 `GCC_OPTIMIZATION_LEVEL = 2`）；`-O0` 会显著增加编码耗时。可将 [Demo 的 post_install 配置](Demo/Podfile) 中仅针对 libwebp Debug 的优化分支合并到应用既有 post_install 中，再执行 `pod install` 并重新构建；该设置只针对 libwebp 依赖，podspec 中压缩核心的优化设置不会传递给依赖。
+
+使用固定 Git 标签安装 1.1.0：
+
 ```ruby
 platform :ios, '15.0'
-pod 'SCMediaCompressor', '~> 1.0', :modular_headers => true
+pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.0', :modular_headers => true
 ```
 
-如果本地或 CDN 索引尚未收录版本，可使用固定 Git 标签直接安装：
-
-```ruby
-platform :ios, '15.0'
-pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.0.0', :modular_headers => true
-```
-
-如需跟随最新公开代码，可将 `:tag => '1.0.0'` 替换为 `:branch => 'main'`。执行 `pod install` 后打开项目的 `.xcworkspace`。
+如需跟随最新公开代码，可将 `:tag => '1.1.0'` 替换为 `:branch => 'main'`。执行 `pod install` 后打开项目的 `.xcworkspace`。
 
 ```objc
 #import <SCMediaCompressor/SCMediaCompressor.h>
@@ -40,7 +39,7 @@ pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompres
 import SCMediaCompressor
 ```
 
-基本功能要求 iOS 15 或以上。HDR 图片保留还取决于系统编码器；跨格式 HDR 转换和 HDR UIImage 缩放要求 iOS 18 或以上。
+基本功能要求 iOS 15 或以上。开启 HDR 后能否保留还取决于系统编码器；保留 HDR 的跨格式转换和 HDR UIImage 缩放要求 iOS 18 或以上，普通图片显式格式可在能力不足时输出同格式 SDR。
 
 ## 压缩图片
 
@@ -87,12 +86,40 @@ let task = SCMediaCompressor.sc_compressImageData(inputData, options: options, p
 
 - `maximumSize`：默认 `1920 × 1920` 像素边界。按宽高比缩小，小图不放大；配置接口中单轴为 0 表示该轴不限制。
 - `quality`：默认 `0.8`，范围 `0…1`。控制图片质量与体积的取舍，不能换算为固定的主观清晰度百分比或文件大小比例。
-- `format`：默认 Automatic；可选 JPEG、PNG、HEIC。Automatic 的 SDR 路径根据内容与实际编码结果选择 JPEG/PNG；HDR 路径见 preservesHDR。
+- `format`：默认 Automatic；可选 JPEG、PNG、HEIC、WebP。Automatic 的 SDR 路径根据内容与实际编码结果选择 JPEG/PNG；HDR 路径见 preservesHDR。
 - `backgroundColor`：显式 JPEG 输出时的透明内容背景色，nil 使用白色。Automatic 保留透明 PNG。
-- `preservesHDR`：默认 NO，HDR 转 SDR 并去除增益图；YES 要求保留输入 HDR，不把 SDR 变成 HDR。JPEG 使用 HDR 增益图；Automatic 的 HDR 路径选 HEIC，显式 JPEG 和 Live 使用增益图 JPEG。format 直接决定输出格式，HEIC 也可在关闭 HDR 时输出 SDR。HDR PNG 或编码器能力不足明确失败。
+- `preservesHDR`：默认 NO，输出 SDR，不保留输入 HDR 或增益图。开启后才尽力保留 HDR，不把 SDR 提升为 HDR。普通图片显式格式优先：PNG/WebP 始终输出 SDR；JPEG/HEIC 先尝试保留 HDR，系统 HDR 能力不足时输出同格式 SDR，已有合规 HDR 原文件可直接参与择小。Automatic 在实际支持 HDR 保留的 HEIC、增益图 JPEG 候选中先判硬约束和保真资格，再按真实体积择小；全部不可用且无合规原文件时明确失败。Live 继续遵守共享 HDR 配对要求。无效输入、取消、真实编码或文件错误仍明确失败。
+- `WebP`：通过 libwebp 输出静态 SDR WebP（CocoaPods 自动安装依赖），保留透明度与 ICC 色域描述；最多五次有界编码，按实际保真评分及字节择小。WebP 单轴上限为 16383 像素，超限明确失败；开启 HDR 时也按指定格式输出 SDR，不支持动画重编码。Live Photo 仍固定 JPEG/MOV。
 - `preservesAnimation`：默认 YES，不丢动画帧。保帧 GIF 符合尺寸与 Automatic 输出时原样返回；需要动画重编码时不支持。设为 NO 可显式允许单帧压缩。
 
 需要上传大小限制的应用，应检查实际输出字节数并自行决定后续操作。
+
+指定 WebP 输出：
+
+```objc
+SCImageCompressionOptions *options = [SCImageCompressionOptions new];
+options.format = SCImageFormatWebP;
+options.preservesHDR = YES; // 开启后才尽力保留；WebP 按指定格式输出 SDR。
+NSData *webp = [SCImageCompressor sc_compressData:data options:options error:&error];
+```
+
+```swift
+let options = SCImageCompressionOptions()
+options.format = .webP
+options.preservesHDR = true // WebP 按指定格式输出 SDR；false 同样输出 SDR。
+let webp = try SCImageCompressor.sc_compressData(data, options: options)
+```
+
+自动保留 HDR 并择优选择实际可用格式：
+
+```swift
+let options = SCImageCompressionOptions()
+options.format = .automatic
+options.preservesHDR = true
+let result = try SCImageCompressor.sc_compressData(data, options: options)
+```
+
+每种 HDR 格式执行既有有界编码，不为小于源文件追加尝试；编码器不可用或无法实际保留 HDR 的格式不参与择优。全部不可用且没有合规原文件时明确失败。透明度等硬约束始终优先；没有达标候选且必须转换时仍可能交付已评分的尽力结果。UIImage 的原文件基准仍为未知，SDR 默认行为不变。
 
 ### 图片质量诊断
 
@@ -123,7 +150,7 @@ options.performanceHandler = ^(SCImagePerformance *performance) {
 ```
 
 - `inputBytes` / `outputBytes`：实际输入和交付图片字节；UIImage 的输入字节未知为 0。失败或取消的交付字节为 0，`succeeded` 为 NO，已发生的编码尝试仍保留。
-- `encodingPassCount` / `encodingCountsByFormat`：实际开始的 ImageIO 编码/写入次数及其 UTI 分组，包含未选中的候选和失败尝试；例如 JPEG 多候选搜索不能误读为只编码一次。
+- `encodingPassCount` / `encodingCountsByFormat`：实际开始的 ImageIO/libwebp 编码/写入次数及其 UTI 分组，包含未选中的候选和失败尝试；例如 JPEG 多候选搜索不能误读为只编码一次。
 - `pairingEncodingPassCount`：Live 的 JPEG 配对重写次数，包含候选和基准；相同配对 ID 的原字节复制不计编码，MOV 重封装不计图片编码。
 - `stageDurations`：秒，包含 prepare（识别/解码/缩放/参考像素及其余开销）、encode、evaluate（候选解码与已有质量评分）、finish（字节择小）、pair（JPEG 配对）和 total。各阶段不重叠；Live 的图片累计时间不包含视频编码、MOV 封装、取源及质量/性能完成回调。
 
@@ -227,7 +254,7 @@ PHPhotoLibrary.shared().performChanges({
 
 普通视频已满足输出约束时，创建时间等普通顶层元数据不会阻止复用原文件；候选没有严格变小就交付原文件的副本。显式设置 `metadata`（包括空数组清除）仍会执行编辑，不能回退到未编辑源文件。原文件透传可能保留原有元数据。
 
-quality 是相对源内容的保真要求，范围 0…1、默认 0.8。图片、视频和 Live Photo 统一使用 `effectiveQualityTarget = 0.95 × quality`，每档都有相对容差：1→0.95、0.8→0.76。所有可编码档位都尝试压缩，包括 1；编码参数与实测保真分数分开，在有界候选中选择满足硬约束、保真目标且实际更小的结果。分数取平均结构相似度、局部细节最低相似度、颜色一致度三项中的最小值；颜色一致度为 `1 − 平均 RGB 绝对误差 / 255`。因此 quality=1 要求这三项均至少为 0.95；该分数不是主观画质百分比。SDR 图片在固定源 RGB 色域中比较参考与候选（非 RGB 源回退 sRGB），避免评分前裁剪宽色域；候选不会改用自己的 ICC 坐标自比较。普通 JPEG 评估目标尺寸像素，HEIC/HDR/Live JPEG 进行有界空间采样；Live 配对后字节未变且已有评分时复用原评分，实际重写或未评分时才评估最终 JPEG。视频进行 3–5 帧代表性时空采样，按真实输出时间戳匹配最近帧并检查最差样本，不承诺全帧保证。JPEG 最多五次编码，首个搜索点随保真目标向高质量区间偏移，再按实际评分细分，不为体积追加编码。没有更小且达标的候选时返回合规基线；必要转换无法达标时成功交付尽力结果并明确未达标，未知与未评估不伪装为达标。PNG 保持无损、GIF 保帧，兼容 AAC 保留原采样；尺寸、HDR、编辑、显式码率/编码设置保持原优先级。
+quality 是相对源内容的保真要求，范围 0…1、默认 0.8。图片、视频和 Live Photo 统一使用 `effectiveQualityTarget = 0.95 × quality`，每档都有相对容差：1→0.95、0.8→0.76。所有可编码档位都尝试压缩，包括 1；编码参数与实测保真分数分开，在有界候选中选择满足硬约束、保真目标且实际更小的结果。分数取平均结构相似度、局部细节最低相似度、颜色一致度三项中的最小值；颜色一致度为 `1 − 平均 RGB 绝对误差 / 255`。因此 quality=1 要求这三项均至少为 0.95；该分数不是主观画质百分比。SDR 图片在固定源 RGB 色域中比较参考与候选（非 RGB 源回退 sRGB），避免评分前裁剪宽色域；候选不会改用自己的 ICC 坐标自比较。普通 JPEG 评估目标尺寸像素，HEIC/HDR/Live JPEG 进行有界空间采样；Live 配对后字节未变且已有评分时复用原评分，实际重写或未评分时才评估最终 JPEG。视频进行 3–5 帧代表性时空采样，按真实输出时间戳匹配最近帧并检查最差样本，不承诺全帧保证。SDR JPEG 搜索最多五次编码，HDR 开启时因能力不足产生的失败尝试另计；首个搜索点随保真目标向高质量区间偏移，再按实际评分细分，不为体积追加编码。没有更小且达标的候选时返回合规基线；必要转换无法达标时成功交付尽力结果并明确未达标，未知与未评估不伪装为达标。PNG 保持无损、GIF 保帧，兼容 AAC 保留原采样；尺寸、HDR、编辑、显式码率/编码设置保持原优先级。
 
 视频完成后可读取 `videoRequestedQuality`、`videoEffectiveQualityTarget`、`videoQualityStatus`、`videoFidelityScore`、`videoCandidateFidelityScore` 和 `videoQualitySampleCount`。候选未达标后回退原内容时，最终分数为 1、样本数为 0，落选候选分数单独保留；这不是声称候选抽样达标。`videoQualityEvaluationDuration` 已包含在 `stageDurations`，不要重复相加。低层视频对应 `requestedQuality`、`effectiveQualityTarget`、`qualityStatus`、`fidelityScore`、`candidateFidelityScore`、`qualitySampleCount`、`qualityEvaluationDuration`。
 
@@ -235,7 +262,7 @@ quality 是相对源内容的保真要求，范围 0…1、默认 0.8。图片�
 
 优先读取 `task.outcome`：一次给出基线/交付字节、是否回退基线、节省比例、图片与视频保真状态及各自编码次数。UIImage 和没有本地原文件的组合素材缺少可比较的原始字节数，`outcome.baselineBytes` / `task.comparisonBytes` 为 0 表示基准未知。`usesConvertedBaseline` 表示使用了已处理的可交付基准，可包含格式、HDR、几何或编辑处理，不能单独据此认定格式改变。Live 的比较基线是最终配对资源的合计；图片自身统计另见 `imageComparisonBytes` / `imageUsesConvertedBaseline`。`videoConversionBytes` 保存首次必要视频转换的实际字节。`encodingPassCount` / `videoEncodingPassCount` 只统计视频；图片次数见 `imagePerformance` 或 `outcome.imageEncodingPassCount`。本库错误域为 `SCMediaCompressorErrorDomain`，码见 `SCMediaCompressorErrorCode`。独立配对工具的完成回调为 `(BOOL success, NSError *error)`，MOV 的 header 仅提供 writer 和 reader。Live 配对失败在系统提供错误时通过 `error.userInfo[NSUnderlyingErrorKey]` 保留原始原因；取消仍使用原有取消错误，ImageIO 未提供 NSError 时只报告配对阶段失败，不伪造底层错误。
 
-图片质量配置作用于 SDR 候选筛选，HDR/显式 HEIC 以 `0.6 × effectiveQualityTarget` 为单次编码初值，再评估实际空间采样；视频自动候选码率以 `0.85 × quality` 为预算系数，最高档也预留压缩空间，保真由输出抽样评分判断；不因源文件体积追加降码率编码，quality 属性值保持不变。不同素材的压缩幅度会不同。视频默认 SDR，可显式保留 HLG/PQ 的 10-bit 像素与色彩，不承诺保留 Dolby Vision 逐帧动态元数据；图片/视频 HDR 保留都取决于格式、系统和实际编码器能力，不支持时返回错误。HDR PNG 不受支持。
+图片质量配置作用于 SDR 候选筛选，HDR/显式 HEIC 以 `0.6 × effectiveQualityTarget` 为单次编码初值，再评估实际空间采样；视频自动候选码率以 `0.85 × quality` 为预算系数，最高档也预留压缩空间，保真由输出抽样评分判断；不因源文件体积追加降码率编码，quality 属性值保持不变。不同素材的压缩幅度会不同。视频默认 SDR，可显式保留 HLG/PQ 的 10-bit 像素与色彩，不承诺保留 Dolby Vision 逐帧动态元数据；只有开启 HDR 时才尝试保留，能否保留取决于格式、系统和实际编码器；普通图片显式格式可同格式转 SDR，Automatic、Live 和视频仍按各自 HDR 约束明确报告不支持。PNG/WebP 不保留 HDR，普通图片显式指定这两种格式时输出 SDR。
 
 实际集成时请使用有代表性的素材验证格式、尺寸、体积和播放效果。实拍观感、Dolby Vision 与 Live Photo 保存播放应在真机核对，模拟器的编码能力可能不同。
 

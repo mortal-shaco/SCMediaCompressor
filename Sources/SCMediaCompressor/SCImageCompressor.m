@@ -44,6 +44,20 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
     sc_log(@"[SCImageCompressor][%@] after status=%@ outputBytes=%lu outputKB=%.2f outputMB=%.3f rawSizeChange=%@ elapsed=%.3fs quality=%.2f",
         identifier, output.length ? @"completed" : @"failed", (unsigned long)output.length, output.length / 1024.0, output.length / (1024.0 * 1024.0), output.length ? saved : @"n/a", CFAbsoluteTimeGetCurrent() - start, (double)quality);
 }
+/// 清除落选 HDR 路径的评估状态，实际编码次数与耗时继续累加。
+/// @param options 本轮内部配置副本，不修改调用方的请求对象。
+static void sc_PrepareSpecifiedSDR(SCImageCompressionOptions *options) {
+    options.preservesHDR=NO;options.sc_expectsHDR=NO;
+    options.sc_fidelityEvaluator=nil;options.sc_requiresFidelityEvaluation=NO;
+    options.sc_fidelityScore=nil;options.sc_baselineFidelityScore=nil;
+}
+/// 普通图片显式格式在 HDR 能力不足时允许同格式 SDR；取消与真实错误不兜底。
+/// @param options 本轮配置。
+/// @param error HDR 阶段的实际错误。
+/// @param livePhoto 是否要求严格保留 Live 的共享 HDR 约束。
+static BOOL sc_CanUseSpecifiedSDR(SCImageCompressionOptions *options, NSError *error, BOOL livePhoto) {
+    return !livePhoto&&!options.sc_imageFinalizer&&(options.format==SCImageFormatJPEG||options.format==SCImageFormatHEIC)&&[error.domain isEqual:SCMediaCompressorErrorDomain]&&error.code==SCMediaCompressorErrorConfigurationConflict&&!(options.sc_cancellationCheck&&options.sc_cancellationCheck());
+}
 @implementation SCImageCompressor
 + (BOOL)sc_containsHDRInData:(NSData *)data {
     // source：原始素材或像素缓冲。
@@ -88,6 +102,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
     // copy：副本。
     SCImageCompressionOptions *copy = [options copy] ?: [SCImageCompressionOptions new];
     copy.quality = sc_NormalizedQuality(copy.quality,sc_DefaultImageQuality);
+    if(copy.preservesHDR&&(copy.format==SCImageFormatPNG||copy.format==SCImageFormatWebP))sc_PrepareSpecifiedSDR(copy);
     copy.sc_unknownSourceBytes=NO;
     // start：起始。
     CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
@@ -120,6 +135,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
         // copy：副本。
         SCImageCompressionOptions *copy = [options copy] ?: [SCImageCompressionOptions new];
         copy.quality = sc_NormalizedQuality(copy.quality,sc_DefaultImageQuality);
+        if(copy.preservesHDR&&(copy.format==SCImageFormatPNG||copy.format==SCImageFormatWebP))sc_PrepareSpecifiedSDR(copy);
         copy.sc_unknownSourceBytes=YES;
         // start：起始。
         // identifier：标识。
@@ -133,12 +149,20 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
             CGSize target=sc_TargetSize(original,copy.maximumSize);
             // result：通过实际 HDR 保留校验的编码数据。
             copy.sc_targetSize=target;copy.sc_expectsHDR=YES;
+            // hdrError：能力不足可走指定格式 SDR，真实错误仍明确失败。
+            NSError *hdrError=nil;
             // result：本次合法 HDR 实际输出，仍需最终描述检查。
-            NSData *result=CGSizeEqualToSize(target,CGSizeZero) ? nil : sc_preserveHDRUIImage(image,target,copy,error);
-            if(result && copy.sc_fidelityEvaluator){copy.sc_fidelityScore=copy.sc_fidelityEvaluator(result);copy.sc_fidelityEvaluator=nil;}
-            if(copy.sc_comparisonHandler)copy.sc_comparisonHandler(0,NO);
-            if(result&&!sc_ValidFinalImage(result,copy,NO)){result=nil;if(error)*error=sc_hdrError(@"Final HDR image violates output constraints");}
-            sc_ReportImageDiagnostics(copy,result);sc_CompressionEnd(identifier,0,result,start,copy.quality);return result;
+            NSData *result=CGSizeEqualToSize(target,CGSizeZero) ? nil : sc_preserveHDRUIImage(image,target,copy,&hdrError);
+            if(result && copy.sc_fidelityEvaluator){if(!copy.sc_fidelityScore)copy.sc_fidelityScore=copy.sc_fidelityEvaluator(result);copy.sc_fidelityEvaluator=nil;}
+            if(result&&!sc_ValidFinalImage(result,copy,NO)){result=nil;hdrError=sc_hdrError(@"Final HDR image violates output constraints");}
+            if(!result&&sc_CanUseSpecifiedSDR(copy,hdrError,NO)){
+                sc_PrepareSpecifiedSDR(copy);
+            }else{
+                if(copy.sc_comparisonHandler)copy.sc_comparisonHandler(0,NO);
+                if(!result&&!hdrError)hdrError=[NSError errorWithDomain:SCMediaCompressorErrorDomain code:SCMediaCompressorErrorImageFailed userInfo:@{NSLocalizedDescriptionKey:@"Invalid image bounds or HDR image rendering failed"}];
+                if(error)*error=hdrError;
+                sc_ReportImageDiagnostics(copy,result);sc_CompressionEnd(identifier,0,result,start,copy.quality);return result;
+            }
         }
         // reference：参考图像。
         UIImage *reference = [self sc_referenceForImage:image bounds:copy.maximumSize];
@@ -171,7 +195,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
         options.sc_targetSize=target;
         // type：实际媒体或容器类型。
         CFStringRef type = CGImageSourceGetType(source);
-        if (CGImageSourceGetCount(source) > 1 && !livePhoto && type && CFEqual(type, (__bridge CFStringRef)UTTypeGIF.identifier) && options.preservesAnimation) {
+        if (CGImageSourceGetCount(source) > 1 && !livePhoto && type && (CFEqual(type, (__bridge CFStringRef)UTTypeGIF.identifier)||CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier)) && options.preservesAnimation) {
             CFRelease(source);
             // 动画默认只原样保留；需要重新编码时明确失败，避免静默丢帧。
             return CGSizeEqualToSize(sourceSize, target) && options.format == SCImageFormatAutomatic ? sc_SizeGuard(data,data,YES,options,nil,nil) : nil;
@@ -181,7 +205,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
         options.sc_expectsHDR=hdr&&options.preservesHDR;
         if(options.preservesHDR && hdr) {
             options.sc_requiresFidelityEvaluation=YES;
-            // result：必要 HDR 转换与请求质量共用一次编码，不生成统计专用文件。
+            // Automatic 按实际支持的 HDR 格式各生成既有候选，不生成统计专用文件。
             // started：HDR 参考与实际候选共用解码/最终滤波，也计入评估开销。
             NSTimeInterval started=options.sc_metrics?sc_ImageNow():0;
             // size：有界空间采样尺寸。
@@ -190,21 +214,30 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
             NSData *reference=sc_FidelitySourcePixels(source,size.width,size.height,YES);
             if(options.sc_metrics)[options.sc_metrics sc_addDuration:sc_ImageNow()-started stage:SCImagePerformanceStageEvaluate];
             sc_SetFidelityEvaluator(reference,size,options,YES);
-            // result：一次真实 HDR 转换与后续同参考保真评估。
-            NSData *result=sc_preserveHDRSource(source,target,options,livePhoto,error);
+            // hdrError：自动候选能力错误与真实失败分别处理。
+            NSError *hdrError=nil;
+            // result：内部始终捕获错误，调用方未传 NSError 指针也不吞掉真实失败。
+            NSData *result=sc_preserveHDRSource(source,target,options,livePhoto,&hdrError);
             // jpeg：源文件是否为增益图 JPEG。
             BOOL jpeg=type&&CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier);
             // heic：源文件是否为真实 HEIC。
             BOOL heic=type&&CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier);
             // matchesFormat：只有真实编码符合 HDR 输出格式的源文件才能回退。
-            BOOL matchesFormat=(livePhoto||options.format==SCImageFormatJPEG)?jpeg:((options.format==SCImageFormatAutomatic||options.format==SCImageFormatHEIC)&&heic);
+            BOOL matchesFormat=(livePhoto||options.format==SCImageFormatJPEG)?jpeg:(options.format==SCImageFormatAutomatic?(jpeg||heic):(options.format==SCImageFormatHEIC&&heic));
             // original：不跳过缩放、方向归一化或动画约束。
             NSData *original=matchesFormat&&CGImageSourceGetCount(source)==1&&(orientation==0||orientation==1)&&CGSizeEqualToSize(sourceSize,target)?data:nil;
-            result=sc_SizeGuard(result,original?:result,original!=nil,options,nil,nil);
-            CFRelease(source);return result;
+            // 原文件已满足指定格式和 HDR 时直接保留；能力不足不需要无谓转 SDR。
+            if(!result&&original&&!livePhoto&&(!hdrError||([hdrError.domain isEqual:SCMediaCompressorErrorDomain]&&hdrError.code==SCMediaCompressorErrorConfigurationConflict))){result=original;hdrError=nil;}
+            if(!result&&sc_CanUseSpecifiedSDR(options,hdrError,livePhoto)){
+                sc_PrepareSpecifiedSDR(options);
+            }else{
+                if(error)*error=hdrError;
+                result=sc_SizeGuard(result,original?:result,original!=nil,options,options.sc_fidelityScore,nil);
+                CFRelease(source);return result;
+            }
         }
         // compatible：原编码是否属于允许直接复用的格式。
-        BOOL compatible = type && (CFEqual(type, (__bridge CFStringRef)UTTypeJPEG.identifier) || (!livePhoto && (CFEqual(type, (__bridge CFStringRef)UTTypePNG.identifier) || (options.format==SCImageFormatHEIC && CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier)))));
+        BOOL compatible = type && (CFEqual(type, (__bridge CFStringRef)UTTypeJPEG.identifier) || (!livePhoto && (CFEqual(type, (__bridge CFStringRef)UTTypePNG.identifier) || (options.format==SCImageFormatHEIC && CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier)) || (options.format==SCImageFormatWebP && CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier)))));
         // singleImage：输入是否只包含一帧静态图片。
         BOOL singleImage = CGImageSourceGetCount(source) == 1;
         // reference：参考图像。
@@ -219,7 +252,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
         // A compatible Live JPEG can keep its original pixels and pairing metadata too.
         // HEIC/HEIF, gain maps, resizing and orientation normalization still require conversion.
         // original：原始资源。
-        NSData *original = (options.format == SCImageFormatAutomatic || (options.format == SCImageFormatJPEG && type && CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier)) || (options.format == SCImageFormatPNG && type && CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier)) || (options.format == SCImageFormatHEIC && type && CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier))) && !hdr && compatible && singleImage && (orientation == 0 || orientation == 1) && CGSizeEqualToSize(sourceSize, target) ? data : nil;
+        NSData *original = (options.format == SCImageFormatAutomatic || (options.format == SCImageFormatJPEG && type && CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier)) || (options.format == SCImageFormatPNG && type && CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier)) || (options.format == SCImageFormatHEIC && type && CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier)) || (options.format == SCImageFormatWebP && type && CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier))) && !hdr && compatible && singleImage && (orientation == 0 || orientation == 1) && CGSizeEqualToSize(sourceSize, target) ? data : nil;
         // result：本次系统操作或编码结果。
         NSData *result = [self sc_encodeReference:reference original:original allowPNG:!livePhoto metadata:metadata options:options quality:quality];
         CGImageRelease(reference);
@@ -275,7 +308,9 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
         NSData *png=sc_Encode(image,(__bridge CFStringRef)UTTypePNG.identifier,1,metadata,options);
         return sc_SizeGuard(png,original ?: png,original!=nil,options,nil,nil);
     }
-    if (options.format == SCImageFormatJPEG) allowPNG = NO;
+    // webp：显式 WebP 复用有界画质搜索，透明内容不铺底。
+    BOOL webp=options.format==SCImageFormatWebP && allowPNG;
+    if (options.format == SCImageFormatJPEG || webp) allowPNG = NO;
     // reference：参考图像。
     NSData *reference = sc_Pixels(image);
     if (!reference) return nil;
@@ -285,7 +320,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
     BOOL transparent = NO;
     // i：当前循环索引。
     for (NSUInteger i = 3; i < reference.length; i += 4) if (pixels[i] != 255) { transparent = YES; break; }
-    if (transparent && !allowPNG) {
+    if (transparent && !allowPNG && !webp) {
         // copy：副本。
         SCImageCompressionOptions *copy=[options copy]; copy.format=SCImageFormatJPEG;
         // result：透明内容铺底后的实际结果，保留内部评分。
@@ -294,7 +329,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
     }
     // best：已测试且满足目标的最小编码结果。
     NSData *best = nil;
-    // maximumQualityJPEG：JPEG 最高质量的可用回退结果。
+    // maximumQualityJPEG：JPEG/WebP 最高编码质量的可用回退结果。
     NSData *maximumQualityJPEG = nil;
     // fallbackScore：最高质量 JPEG 的校准分数。
     double fallbackScore = -1;
@@ -307,21 +342,22 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
         NSData *png = sc_Encode(image, (__bridge CFStringRef)UTTypePNG.identifier, 1, metadata, options);
         if (png.length && (!best || png.length < best.length)) best = png;
     }
-    if (transparent) return sc_SizeGuard(best,original ?: best,original!=nil,options,nil,nil);
+    if (transparent && !webp) return sc_SizeGuard(best,original ?: best,original!=nil,options,nil,nil);
     // baseline：原文件或画质搜索期间已经实际产出的必要转换候选。
     NSData *baseline=nil;
-    // low：JPEG 搜索的质量下界。
-    // high：JPEG 搜索的质量上界。
+    // low：JPEG/WebP 搜索的质量下界。
+    // high：JPEG/WebP 搜索的质量上界。
     double low = 0.20, high = 1.0;
-    // step：有限JPEG搜索步骤索引。
+    // step：有限 JPEG/WebP 搜索步骤索引。
     for (NSUInteger step = 0; step <= sc_QualitySearchSteps; step++) {
         if (options.sc_cancellationCheck && options.sc_cancellationCheck()) return nil;
         @autoreleasepool {
             // quality：质量。
             // 首个探测点向严格目标偏移，为接近 1 的区间保留后续细分预算；资格仍由实际评分决定。
             double quality = step == 0 ? 1.0 : (step == 1 ? MAX((low + high)/2,sc_EffectiveFidelityTarget(requestedQuality)) : (low + high)/2);
-            // jpeg：本轮JPEG编码数据。
-            NSData *jpeg = sc_Encode(image, (__bridge CFStringRef)UTTypeJPEG.identifier, quality, metadata, options);
+            // jpeg：本轮 JPEG/WebP 实际编码候选。
+            NSData *jpeg = webp ? sc_EncodeWebP(image,reference,quality,options) : sc_Encode(image, (__bridge CFStringRef)UTTypeJPEG.identifier, quality, metadata, options);
+            if(!jpeg.length)return nil;
             if (step == 0) maximumQualityJPEG = jpeg;
             // score：该候选复用原有固定参考评分。
             double score=-1;
@@ -353,7 +389,7 @@ static void sc_CompressionEnd(NSString *identifier, NSUInteger inputBytes, NSDat
     // type：实际媒体或容器类型。
     CFStringRef type = source ? CGImageSourceGetType(source) : NULL;
     // suffix：真实编码的扩展名。
-    NSString *suffix = type && CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier) ? @"png" : type && CFEqual(type,(__bridge CFStringRef)UTTypeGIF.identifier) ? @"gif" : type && CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier) ? @"jpg" : type && (CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier) || [[UTType typeWithIdentifier:(__bridge NSString *)type]conformsToType:UTTypeHEIF]) ? @"heic" : @"";
+    NSString *suffix = type && CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier) ? @"webp" : type && CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier) ? @"png" : type && CFEqual(type,(__bridge CFStringRef)UTTypeGIF.identifier) ? @"gif" : type && CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier) ? @"jpg" : type && (CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier) || [[UTType typeWithIdentifier:(__bridge NSString *)type]conformsToType:UTTypeHEIF]) ? @"heic" : @"";
     if (source) CFRelease(source);
     return suffix;
 }

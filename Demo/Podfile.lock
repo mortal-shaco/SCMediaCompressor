@@ -1,16 +1,29 @@
 PODS:
-  - SCMediaCompressor (1.0.0)
+  - libwebp/demux (1.6.0):
+    - libwebp/webp
+  - libwebp/mux (1.6.0):
+    - libwebp/demux
+  - libwebp/sharpyuv (1.6.0)
+  - libwebp/webp (1.6.0):
+    - libwebp/sharpyuv
+  - SCMediaCompressor (1.1.0):
+    - libwebp/mux (~> 1.6)
 
 DEPENDENCIES:
   - SCMediaCompressor (from `..`)
+
+SPEC REPOS:
+  trunk:
+    - libwebp
 
 EXTERNAL SOURCES:
   SCMediaCompressor:
     :path: ".."
 
 SPEC CHECKSUMS:
-  SCMediaCompressor: 2422c64c35fb9d4d1438b9df9e6b0132523ce92d
+  libwebp: af5937a13536ef73f3784d69cc342b98961acf33
+  SCMediaCompressor: 83c58d9e092cef97eb905bf2de6b7a57e6e598aa
 
-PODFILE CHECKSUM: 855cdec25eb5b11c32c79e4fba0b34f82f472939
+PODFILE CHECKSUM: 00fd1e9e67de7a650b1e3e55a8efe7ad3429c236
 
 COCOAPODS: 1.17.0

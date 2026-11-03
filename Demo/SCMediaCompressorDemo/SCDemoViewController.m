@@ -102,7 +102,7 @@ static NSString *sc_demoImagePerformanceText(SCImagePerformance *performance) {
 @property UISwitch *videoHDRSwitch;
 /// 普通视频封装选择，默认 MP4；Live 最终视频固定 MOV。
 @property UISegmentedControl *videoContainer;
-/// 自动、JPEG、PNG 或 HEIC 图片格式。
+/// 自动、JPEG、PNG、HEIC 或 WebP 图片格式。
 @property UISegmentedControl *imageFormat;
 /// 本次图片与视频质量参数。
 @property UISlider *qualitySlider;
@@ -150,9 +150,10 @@ static NSString *sc_demoImagePerformanceText(SCImagePerformance *performance) {
     // fitting：优先填满一屏，控件最小高度不足时自动滚动而不裁剪。
     NSLayoutConstraint *fitting=[stack.heightAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.heightAnchor constant:-16];fitting.priority=UILayoutPriorityDefaultHigh;fitting.active=YES;
     self.imageHDRSwitch=[UISwitch new];self.videoHDRSwitch=[UISwitch new];
-    self.imageHDRSwitch.accessibilityLabel=@"图片与 Live Photo 保留 HDR";self.videoHDRSwitch.accessibilityLabel=@"普通视频保留 HDR";
+    self.imageHDRSwitch.accessibilityLabel=@"图片与 Live Photo 保留 HDR";self.imageHDRSwitch.accessibilityHint=@"普通图片指定格式优先，不能保留 HDR 时输出同格式 SDR；自动模式和 Live 要求保留 HDR。";self.videoHDRSwitch.accessibilityLabel=@"普通视频保留 HDR";
     [stack addArrangedSubview:[self sc_columns:@[[self sc_switchRow:@"图片/Live HDR" control:self.imageHDRSwitch],[self sc_switchRow:@"视频 HDR" control:self.videoHDRSwitch]]]];
-    self.imageFormat=[[UISegmentedControl alloc]initWithItems:@[@"自动",@"JPEG",@"PNG",@"HEIC"]];self.imageFormat.selectedSegmentIndex=0;
+    self.imageFormat=[[UISegmentedControl alloc]initWithItems:@[@"自动",@"JPEG",@"PNG",@"HEIC",@"WebP"]];self.imageFormat.selectedSegmentIndex=0;
+    self.imageFormat.accessibilityHint=@"自动保留 HDR 时在可用格式中按保真和实际体积择优，Live 固定 JPEG。";
     [stack addArrangedSubview:[self sc_row:@"图片格式" control:self.imageFormat]];
     self.videoContainer=[[UISegmentedControl alloc]initWithItems:@[@"MP4",@"MOV"]];self.videoContainer.selectedSegmentIndex=0;self.videoContainer.accessibilityLabel=@"普通视频格式，Live 固定 MOV";
     [stack addArrangedSubview:[self sc_row:@"视频格式" control:self.videoContainer]];

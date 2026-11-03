@@ -3,6 +3,13 @@
 #import "SCInternal.h"
 #import "SCSizePolicy.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#if __has_include(<libwebp/encode.h>)
+#import <libwebp/encode.h>
+#import <libwebp/mux.h>
+#else
+#import <webp/encode.h>
+#import <webp/mux.h>
+#endif
 
 /// 截断有限质量参数并为非有限输入提供回退。
 /// @param quality 质量。
@@ -91,4 +98,56 @@ NSData *sc_Encode(CGImageRef image, CFStringRef type, double quality, NSDictiona
     sc_EndImageEncoding(options,encodingStarted);
     CFRelease(dest);
     return ok ? data.copy : nil;
+}
+
+/// 将同域预乘像素还原为直通 RGBA，编码并附带实际源 ICC。
+/// @param image 已完成方向和几何处理的源参考。
+/// @param pixels 同一参考的预乘 RGBA 像素，不重新绘制。
+/// @param quality 本次有界搜索的编码参数，独立于保真目标。
+/// @param options 本轮编码计数及耗时累加器。
+NSData *sc_EncodeWebP(CGImageRef image, NSData *pixels, double quality, SCImageCompressionOptions *options) {
+    // width、height：规范允许的尺寸，不静默缩小以适配编码器。
+    size_t width=CGImageGetWidth(image),height=CGImageGetHeight(image);
+    if(!width||!height||width>WEBP_MAX_DIMENSION||height>WEBP_MAX_DIMENSION||pixels.length!=width*height*4)return nil;
+    // profile：没有 ICC 的设备色域先实际转换到 sRGB，再写入对应描述。
+    NSData *profile=CFBridgingRelease(CGColorSpaceCopyICCData(CGImageGetColorSpace(image)));
+    if(!profile.length){
+        // standard：无配置文件像素的明确编码坐标，不只改标签。
+        CGColorSpaceRef standard=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        pixels=sc_ImagePixels(image,CGSizeMake(width,height),standard);
+        profile=CFBridgingRelease(CGColorSpaceCopyICCData(standard));CGColorSpaceRelease(standard);
+        if(!pixels||!profile.length)return nil;
+    }
+    // straight：编码器要求非预乘 RGBA，保留真实 alpha。
+    NSMutableData *straight=[pixels mutableCopy];
+    // rgba：只修改本轮私有像素副本。
+    uint8_t *rgba=straight.mutableBytes;
+    // i：当前像素起点。
+    for(NSUInteger i=0;i<straight.length;i+=4){
+        // alpha：透明度为零时隐藏颜色归零，避免除零。
+        unsigned alpha=rgba[i+3];
+        // channel：只还原颜色，不修改透明度。
+        for(NSUInteger channel=0;channel<3;channel++)rgba[i+channel]=alpha?MIN(255,(rgba[i+channel]*255+alpha/2)/alpha):0;
+    }
+    // encoded：由 libwebp 分配，完成封装后释放。
+    uint8_t *encoded=NULL;
+    // started：真实编码及封装的统计起点。
+    NSTimeInterval started=sc_BeginImageEncoding(options,UTTypeWebP.identifier,quality);
+    // length：实际编码字节，失败为零。
+    size_t length=WebPEncodeRGBA(rgba,(int)width,(int)height,(int)width*4,(float)(quality*100),&encoded);
+    // result：交付源色域描述，不误标宽色域字节。
+    NSData *result=nil;
+    if(length){
+        // bitstream：已完成的真实 WebP 数据。
+        WebPData bitstream={encoded,length};
+        // mux：附加 ICC，不重新编码图像。
+        WebPMux *mux=WebPMuxCreate(&bitstream,1);
+        // icc：封装只复制配置文件，不改变色值。
+        WebPData icc={profile.bytes,profile.length};
+        // assembled：mux 分配的完整容器字节。
+        WebPData assembled={NULL,0};
+        if(mux&&profile.length&&WebPMuxSetChunk(mux,"ICCP",&icc,1)==WEBP_MUX_OK&&WebPMuxAssemble(mux,&assembled)==WEBP_MUX_OK)result=[NSData dataWithBytes:assembled.bytes length:assembled.size];
+        WebPDataClear(&assembled);if(mux)WebPMuxDelete(mux);
+    }
+    WebPFree(encoded);sc_EndImageEncoding(options,started);return result;
 }

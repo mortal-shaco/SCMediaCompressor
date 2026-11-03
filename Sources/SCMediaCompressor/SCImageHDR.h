@@ -7,9 +7,9 @@ FOUNDATION_EXPORT BOOL sc_sourceContainsHDR(CGImageSourceRef source);
 FOUNDATION_EXPORT BOOL sc_imageContainsHDR(CGImageRef image);
 /// 按目标尺寸解码同一源的 HDR 浮点参考；不支持时为 NULL，调用方负责 CGImageRelease。
 FOUNDATION_EXPORT CGImageRef sc_decodeHDRReference(CGImageSourceRef source, CGSize target) CF_RETURNS_RETAINED;
-/// 在允许的特殊输出中保留 HDR，无法保留时返回明确错误而不退化为 SDR。
+/// 保留 HDR；Automatic 按同源保真与真实字节选择可用格式，显式格式和 Live 不跨格式。
 FOUNDATION_EXPORT NSData *sc_preserveHDRSource(CGImageSourceRef source, CGSize target, SCImageCompressionOptions *options, BOOL livePhoto, NSError **error);
-/// 编码已携带 HDR 像素的图片，要求 iOS 18 的系统 HDR 编码支持。
+/// 编码已携带 HDR 像素的图片；Automatic 共用源参考比较可用 HDR 格式，要求 iOS 18 系统能力。
 FOUNDATION_EXPORT NSData *sc_encodeHDRImage(CGImageRef image, SCImageCompressionOptions *options, BOOL livePhoto, NSError **error);
 /// 检测 UIImage 实际携带的 CGImage/CIImage HDR 像素。
 FOUNDATION_EXPORT BOOL sc_UIImageContainsHDR(UIImage *image);

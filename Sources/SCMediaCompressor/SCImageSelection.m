@@ -162,8 +162,9 @@ BOOL sc_ValidFinalImage(NSData *data,SCImageCompressionOptions *options,BOOL liv
     if(live)valid=valid&&type&&CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier);
     else if(options.format==SCImageFormatJPEG)valid=valid&&type&&CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier);
     else if(options.format==SCImageFormatPNG)valid=valid&&type&&CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier);
+    else if(options.format==SCImageFormatWebP)valid=valid&&type&&CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier);
     else if(options.format==SCImageFormatHEIC)valid=valid&&type&&CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier);
-    else valid=valid&&type&&(options.sc_expectsHDR?CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier):(CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier)||CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier)||(options.preservesAnimation&&CFEqual(type,(__bridge CFStringRef)UTTypeGIF.identifier))));
+    else valid=valid&&type&&(options.sc_expectsHDR?(CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier)||CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier)):(CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier)||CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier)||(options.preservesAnimation&&CFEqual(type,(__bridge CFStringRef)UTTypeGIF.identifier))));
     CFRelease(source);return valid;
 }
 

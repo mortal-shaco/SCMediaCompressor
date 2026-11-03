@@ -15,8 +15,8 @@ func sc_example(data: Data, asset: AVAsset, imageURL: URL, videoURL: URL, parent
     options.maximumSize = CGSize(width: 1920, height: 1920)
     // 按次设置质量，不依赖全局可写质量。
     options.quality = 0.8
-    // 直接选择输出格式，HDR 默认转 SDR。
-    options.format = .automatic
+    // 显式输出静态 WebP，保留透明度；不支持 HDR 保留，Live 仍固定 JPEG。
+    options.format = .webP
     options.preservesHDR = false
     // 诊断回调在处理队列；未评估时 score 为 nil，不代表评分失败。
     options.qualityAssessmentHandler = { status, requested, score in
@@ -77,4 +77,20 @@ func sc_example(data: Data, asset: AVAsset, imageURL: URL, videoURL: URL, parent
         // Live 采用 options 的尺寸、quality、preservesHDR，configureVideo 不能覆盖。
         // photo、movie：配对 JPEG/MOV，保存完成后再清理。
     }
+}
+
+/// 自动选择实际可保留 HDR 的合格格式；输出扩展名按真实字节识别。
+func sc_HDRExample(data: Data) throws -> Data? {
+    let options = SCImageCompressionOptions()
+    options.format = .automatic
+    options.preservesHDR = true
+    return try SCImageCompressor.sc_compressData(data, options: options)
+}
+
+/// 显式 WebP 优先；HDR 偏好开启时将 HDR 输入转为 SDR WebP。
+func sc_WebPWithHDRExample(data: Data) throws -> Data? {
+    let options = SCImageCompressionOptions()
+    options.format = .webP
+    options.preservesHDR = true
+    return try SCImageCompressor.sc_compressData(data, options: options)
 }

@@ -3,3 +3,16 @@ source 'https://cdn.cocoapods.org'
 target 'SCMediaCompressorDemo' do
   pod 'SCMediaCompressor', :path => '..', :modular_headers => true
 end
+
+# 依赖统一使用 Demo 的最低系统版本，兼容不再接受 iOS 9 目标的新 Xcode。
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      # 软件 WebP 编码器在 -O0 下会显著变慢，仅优化依赖的 Debug 构建。
+      if target.name == 'libwebp' && config.name.start_with?('Debug')
+        config.build_settings['GCC_OPTIMIZATION_LEVEL'] = '2'
+      end
+    end
+  end
+end
