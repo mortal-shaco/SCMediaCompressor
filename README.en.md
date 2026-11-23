@@ -22,6 +22,12 @@ If a newer Xcode rejects libwebp’s iOS 9 deployment target, set the Pods deplo
 
 WebP uses a software encoder. For Debug builds, enable compiler optimization for `libwebp` (for example, `GCC_OPTIMIZATION_LEVEL = 2`); `-O0` can greatly increase encoding time. Merge only the libwebp Debug optimization branch from the [Demo post_install configuration](Demo/Podfile) into your app’s existing post_install, run `pod install`, then rebuild. The setting targets the libwebp dependency; optimization configured for the compressor pod does not propagate to its dependencies.
 
+Install 1.1.1 from CocoaPods Specs:
+
+```ruby
+pod 'SCMediaCompressor', '1.1.1', :modular_headers => true
+```
+
 Install 1.1.1 from its fixed Git tag:
 
 ```ruby
