@@ -24,8 +24,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param source 原始视频文件。
 /// @param output 未占用的输出 MOV 路径。
 /// @param identifier 与静态 JPEG 相同的配对标识。
-/// @param header 可选的读写器回调；可取消当前封装。
+/// @param header 在封装队列同步调用；仅可在回调内操作读写器，跨线程取消使用 cancellation 入口。
 /// @param completion 唯一完成回调。
 + (void)sc_writePairedMovieAtURL:(NSURL *)source toURL:(NSURL *)output identifier:(NSString *)identifier header:(nullable void (^)(AVAssetWriter *writer, AVAssetReader *reader))header completion:(void (^)(BOOL success, NSError * _Nullable error))completion;
+/// 注册线程安全的取消动作，读取及异步收尾停止后才交付唯一完成回调。
+/// @param source 已压缩的视频文件。
+/// @param output 未占用的 MOV 目标。
+/// @param identifier 配对标识。
+/// @param cancellation 在封装队列接收取消动作，可保存后从任意线程重复调用。
+/// @param completion 封装队列上的唯一完成回调；取消时输出已经清理。
++ (void)sc_writePairedMovieAtURL:(NSURL *)source toURL:(NSURL *)output identifier:(NSString *)identifier cancellation:(nullable void (^)(dispatch_block_t cancel))cancellation completion:(void (^)(BOOL success, NSError * _Nullable error))completion;
 @end
 NS_ASSUME_NONNULL_END

@@ -22,14 +22,14 @@ If a newer Xcode rejects libwebp’s iOS 9 deployment target, set the Pods deplo
 
 WebP uses a software encoder. For Debug builds, enable compiler optimization for `libwebp` (for example, `GCC_OPTIMIZATION_LEVEL = 2`); `-O0` can greatly increase encoding time. Merge only the libwebp Debug optimization branch from the [Demo post_install configuration](Demo/Podfile) into your app’s existing post_install, run `pod install`, then rebuild. The setting targets the libwebp dependency; optimization configured for the compressor pod does not propagate to its dependencies.
 
-Install 1.1.0 from its fixed Git tag:
+Install 1.1.1 from its fixed Git tag:
 
 ```ruby
 platform :ios, '15.0'
-pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.0', :modular_headers => true
+pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.1', :modular_headers => true
 ```
 
-To follow the latest public code, replace `:tag => '1.1.0'` with `:branch => 'main'`. Run `pod install`, then open your project's `.xcworkspace`.
+To follow the latest public code, replace `:tag => '1.1.1'` with `:branch => 'main'`. Run `pod install`, then open your project's `.xcworkspace`.
 
 ```objc
 #import <SCMediaCompressor/SCMediaCompressor.h>
@@ -241,6 +241,8 @@ The app supplies photo-library usage descriptions and requests permissions. The 
 - Disable logging with `SCMediaCompressor.sc_setLogHandler(nil)`. Custom log handlers run on the producing worker queue.
 
 Errors may come from this library, AVFoundation or the file system. Cancellation uses `NSCocoaErrorDomain / NSUserCancelledError`. In the `SCMediaCompressor` domain, code 1 indicates image input/encoding failure, code 2 indicates task/pairing failure, and code 3 indicates unsupported format/HDR configuration. A lack of size savings returns the compliant baseline successfully. Inspect the error domain, code and description.
+
+For Live Photo MOV pairing, use `sc_writePairedMovieAtURL:toURL:identifier:cancellation:completion:` to register a cancellation action callable from any thread. Completion runs once on the rewrap queue after reading/writing has stopped and cancelled output has been removed. Use the legacy `header` callback to access readers/writers synchronously within that callback only.
 
 ## Output behavior and limits
 

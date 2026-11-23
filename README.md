@@ -22,14 +22,14 @@ SCMediaCompressor 是一个 iOS 图片、视频和 Live Photo 压缩库。它使
 
 WebP 使用软件编码。Debug 集成时请为 `libwebp` 开启编译优化（例如 `GCC_OPTIMIZATION_LEVEL = 2`）；`-O0` 会显著增加编码耗时。可将 [Demo 的 post_install 配置](Demo/Podfile) 中仅针对 libwebp Debug 的优化分支合并到应用既有 post_install 中，再执行 `pod install` 并重新构建；该设置只针对 libwebp 依赖，podspec 中压缩核心的优化设置不会传递给依赖。
 
-使用固定 Git 标签安装 1.1.0：
+使用固定 Git 标签安装 1.1.1：
 
 ```ruby
 platform :ios, '15.0'
-pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.0', :modular_headers => true
+pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.1', :modular_headers => true
 ```
 
-如需跟随最新公开代码，可将 `:tag => '1.1.0'` 替换为 `:branch => 'main'`。执行 `pod install` 后打开项目的 `.xcworkspace`。
+如需跟随最新公开代码，可将 `:tag => '1.1.1'` 替换为 `:branch => 'main'`。执行 `pod install` 后打开项目的 `.xcworkspace`。
 
 ```objc
 #import <SCMediaCompressor/SCMediaCompressor.h>
@@ -245,6 +245,8 @@ PHPhotoLibrary.shared().performChanges({
 - 可通过 `SCMediaCompressor.sc_setLogHandler(nil)` 关闭日志；自定义接收器在产生消息的工作队列调用。
 
 错误可能来自本库、AVFoundation 或文件系统。取消使用 `NSCocoaErrorDomain / NSUserCancelledError`；`SCMediaCompressor` 错误码 1 表示图片输入或编码失败，2 表示高层任务/配对失败，3 表示不支持的格式/HDR 配置。没有体积收益时正常返回合规基线。请以 error 的 domain、code 和说明处理具体失败。
+
+Live Photo MOV 配对支持通过 `sc_writePairedMovieAtURL:toURL:identifier:cancellation:completion:` 注册可跨线程调用的取消动作。完成回调在封装队列执行一次，取消后的回调会等待读写停止并清理本次输出。旧 `header` 回调仅可同步操作读写器。
 
 ## 输出与适用边界
 

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = 'SCMediaCompressor'
-  s.version = '1.1.0'
+  s.version = '1.1.1'
   s.summary = 'Configurable image, video and Live Photo compression for iOS.'
   s.description = 'One Objective-C core for image fidelity and HDR, automatic H264 SDR or HEVC HDR video with MP4/MOV and size protection, and Live Photo pairing. Swift callable, configurable pixel bounds, asynchronous progress and cancellation.'
   s.homepage = 'https://github.com/mortal-shaco/SCMediaCompressor'

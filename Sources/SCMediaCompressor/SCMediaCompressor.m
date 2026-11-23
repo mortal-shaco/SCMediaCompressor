@@ -321,16 +321,16 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
                             BOOL copied=[NSFileManager.defaultManager copyItemAtURL:pairedVideo toURL:baselineVideo error:&copyError];
                             finishBaseline(copied,copyError);
                         } else {
-                            // writer、reader：基准内容不同时才启动可取消的配对封装。
-                            [SCLivePhotoResourceWriter sc_writePairedMovieAtURL:session.sc_comparisonOutputURL toURL:baselineVideo identifier:identifier header:^(AVAssetWriter *writer,AVAssetReader *reader){
-                                [task sc_setCancellationHandler:^{[reader cancelReading];[writer cancelWriting];}];
+                            // cancel：基准内容不同时注册封装队列拥有的取消动作。
+                            [SCLivePhotoResourceWriter sc_writePairedMovieAtURL:session.sc_comparisonOutputURL toURL:baselineVideo identifier:identifier cancellation:^(dispatch_block_t cancel){
+                                [task sc_setCancellationHandler:cancel];
                             } completion:finishBaseline];
                         }
                     }];
                 };
-                // writer、reader：只为最终候选执行一次 MOV 配对。
-                [SCLivePhotoResourceWriter sc_writePairedMovieAtURL:movie toURL:pairedVideo identifier:identifier header:^(AVAssetWriter *writer,AVAssetReader *reader){
-                    [task sc_setCancellationHandler:^{[reader cancelReading];[writer cancelWriting];fail(sc_taskError(@"Cancelled",YES));}];
+                // cancel：只请求最终候选的 MOV 配对取消，停止后再由完成回调清理。
+                [SCLivePhotoResourceWriter sc_writePairedMovieAtURL:movie toURL:pairedVideo identifier:identifier cancellation:^(dispatch_block_t cancel){
+                    [task sc_setCancellationHandler:cancel];
                 } completion:videoReady];
             }];
         }];
