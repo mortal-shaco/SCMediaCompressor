@@ -22,10 +22,10 @@ SCMediaCompressor 是一个 iOS 图片、视频和 Live Photo 压缩库。它使
 
 WebP 使用软件编码。Debug 集成时请为 `libwebp` 开启编译优化（例如 `GCC_OPTIMIZATION_LEVEL = 2`）；`-O0` 会显著增加编码耗时。可将 [Demo 的 post_install 配置](Demo/Podfile) 中仅针对 libwebp Debug 的优化分支合并到应用既有 post_install 中，再执行 `pod install` 并重新构建；该设置只针对 libwebp 依赖，podspec 中压缩核心的优化设置不会传递给依赖。
 
-通过 CocoaPods Specs 安装 1.1.1：
+通过 CocoaPods Specs 安装 1.1.2：
 
 ```ruby
-pod 'SCMediaCompressor', '1.1.1', :modular_headers => true
+pod 'SCMediaCompressor', '1.1.2', :modular_headers => true
 ```
 
 使用固定 Git 标签安装 1.1.2：
