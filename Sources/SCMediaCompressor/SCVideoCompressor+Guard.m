@@ -15,7 +15,7 @@
     // pixels：实际写入参考，渲染代理不会被第二次调用。
     NSData *pixels=sc_FidelityBufferPixels(buffer,size.width,size.height,self.sc_exportsHDR);
     if(pixels)[self.sc_fidelityReferences addObject:@{@"time":[NSValue valueWithCMTime:time],@"pixels":pixels,@"width":@(size.width),@"height":@(size.height)}];
-    self.qualityEvaluationDuration+=NSProcessInfo.processInfo.systemUptime-started;
+    self.sc_result.qualityEvaluationDuration+=NSProcessInfo.processInfo.systemUptime-started;
 }
 
 /// 只解码候选的有界时间片，保留最差抽样分数，不用平均值掩盖明显坏帧。
@@ -23,7 +23,7 @@
     // started：输出抽样解码与评分的实际耗时。
     NSTimeInterval started=NSProcessInfo.processInfo.systemUptime;
     @try {
-    self.fidelityScore=nil;self.qualityStatus=SCVideoQualityStatusNotEvaluated;self.qualitySampleCount=0;
+    self.sc_result.fidelityScore=nil;self.sc_result.qualityStatus=SCVideoQualityStatusNotEvaluated;self.sc_result.qualitySampleCount=0;
     if(!self.sc_fidelityReferences.count)return;
     // asset：真实完成的编码结果。
     AVAsset *asset=[AVAsset assetWithURL:self.activeOutputURL];
@@ -93,15 +93,15 @@
     double worst=1;
     // score：只在全部有效时发布达标结论。
     for(id score in scores){if(![score isKindOfClass:NSNumber.class])return;worst=MIN(worst,[score doubleValue]);}
-    self.qualitySampleCount=scores.count;
-    self.fidelityScore=@(worst);self.candidateFidelityScore=self.fidelityScore;
-    self.qualityStatus=worst+1e-9>=sc_EffectiveFidelityTarget(self.exportVideoQuality)?SCVideoQualityStatusMet:SCVideoQualityStatusNotMet;
-    } @finally {self.qualityEvaluationDuration+=NSProcessInfo.processInfo.systemUptime-started;}
+    self.sc_result.qualitySampleCount=scores.count;
+    self.sc_result.fidelityScore=@(worst);self.sc_result.candidateFidelityScore=self.sc_result.fidelityScore;
+    self.sc_result.qualityStatus=worst+1e-9>=sc_EffectiveFidelityTarget(self.exportVideoQuality)?SCVideoQualityStatusMet:SCVideoQualityStatusNotMet;
+    } @finally {self.sc_result.qualityEvaluationDuration+=NSProcessInfo.processInfo.systemUptime-started;}
 }
 
 /// 返回原内容基线时清空落选采样口径，不继承候选的未达标状态。
 - (void)sc_useBaselineQuality {
-    self.fidelityScore=@1;self.qualityStatus=SCVideoQualityStatusMet;self.qualitySampleCount=0;
+    self.sc_result.fidelityScore=@1;self.sc_result.qualityStatus=SCVideoQualityStatusMet;self.sc_result.qualitySampleCount=0;
 }
 
 /// 最后一次选择后核对实际文件描述，不启动额外编码或全片扫描。
@@ -118,7 +118,7 @@
        !CGAffineTransformIsIdentity(track.preferredTransform) || !isfinite(track.nominalFrameRate) || track.nominalFrameRate>self.exportMaximumFrameRate+2/MAX(.01,self.exportDuration) ||
        fabs(CMTimeGetSeconds(track.timeRange.duration)-self.exportDuration)>MAX(.15,2/self.exportMaximumFrameRate))return sc_ExportError([NSString stringWithFormat:@"Final video violates geometry or timing constraints: actual=%gx%g expected=%@x%@ fps=%g duration=%g requested=%g",size.width,size.height,settings[AVVideoWidthKey],settings[AVVideoHeightKey],track.nominalFrameRate,CMTimeGetSeconds(track.timeRange.duration),self.exportDuration]);
     if(self.sc_exportsHDR ? !sc_HDRVideoMatches(asset,self.sc_exportColorProperties) : [asset tracksWithMediaCharacteristic:AVMediaCharacteristicContainsHDRVideo].count>0)return sc_VideoConfigurationError(@"Final video violates dynamic-range constraints");
-    if(self.shouldOptimizeForNetworkUse&&!sc_HasFastStart(self.activeOutputURL))return sc_ExportError(@"Final video is not optimized for network playback");
+    if(self.sc_configuration.shouldOptimizeForNetworkUse&&!sc_HasFastStart(self.activeOutputURL))return sc_ExportError(@"Final video is not optimized for network playback");
     return nil;
 }
 
@@ -134,18 +134,18 @@
     if(![candidate tracksWithMediaType:AVMediaTypeVideo].count){[self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:sc_ExportError(@"Encoded file has no readable video track")];return;}
     [self sc_assessFidelity];
     if(self.sc_requiresEncodingConversion){
-        self.conversionBytes=outputBytes;self.sc_sourceBaselineURL=self.activeOutputURL;self.usesConvertedBaseline=YES;
+        self.sc_result.conversionBytes=outputBytes;self.sc_sourceBaselineURL=self.activeOutputURL;self.sc_result.usesConvertedBaseline=YES;
     }
-    self.comparisonBytes=self.sc_sourceBaselineURL?[NSFileManager.defaultManager attributesOfItemAtPath:self.sc_sourceBaselineURL.path error:nil].fileSize:0;
+    self.sc_result.comparisonBytes=self.sc_sourceBaselineURL?[NSFileManager.defaultManager attributesOfItemAtPath:self.sc_sourceBaselineURL.path error:nil].fileSize:0;
     self.sc_comparisonBaselineReusable=[self sc_canReturnCompressionBaseline];
     // error：只报告真实文件读写失败，不因缺少体积收益产生错误。
     NSError *error=nil;
-    if(self.comparisonBytes && !self.sc_comparisonBaselineReusable){
+    if(self.sc_result.comparisonBytes && !self.sc_comparisonBaselineReusable){
         // 原基线不满足几何或编辑约束时，复用本次已经完成的合法处理结果作为基线。
-        self.sc_sourceBaselineURL=self.activeOutputURL;self.comparisonBytes=outputBytes;self.usesConvertedBaseline=YES;self.sc_comparisonBaselineReusable=YES;
+        self.sc_sourceBaselineURL=self.activeOutputURL;self.sc_result.comparisonBytes=outputBytes;self.sc_result.usesConvertedBaseline=YES;self.sc_comparisonBaselineReusable=YES;
     }
     if(self.sc_comparisonOutputURL && self.sc_sourceBaselineURL && ![NSFileManager.defaultManager copyItemAtURL:self.sc_sourceBaselineURL toURL:self.sc_comparisonOutputURL error:&error]){[self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:error];return;}
-    if(self.sc_comparisonBaselineReusable && self.comparisonBytes && (outputBytes>=self.comparisonBytes || self.qualityStatus!=SCVideoQualityStatusMet) && ![self.sc_sourceBaselineURL isEqual:self.activeOutputURL]){
+    if(self.sc_comparisonBaselineReusable && self.sc_result.comparisonBytes && (outputBytes>=self.sc_result.comparisonBytes || self.sc_result.qualityStatus!=SCVideoQualityStatusMet) && ![self.sc_sourceBaselineURL isEqual:self.activeOutputURL]){
         if(![NSFileManager.defaultManager removeItemAtURL:self.activeOutputURL error:&error] || ![NSFileManager.defaultManager copyItemAtURL:self.sc_sourceBaselineURL toURL:self.activeOutputURL error:&error]){[self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:error];return;}
         [self sc_useBaselineQuality];
     }
@@ -176,11 +176,8 @@
 - (void)sc_releaseAttempt {
     if (self.reader.status == AVAssetReaderStatusReading) [self.reader cancelReading];
     if (self.writer.status == AVAssetWriterStatusWriting) [self.writer cancelWriting];
-    self.liveMetadataOutputs = nil;
-    self.liveMetadataInputs = nil;
-    self.completedMetadataInputs = nil;
-    self.liveMetadataReaders = nil;
-    self.liveMetadataWriters = nil;
+    self.liveMetadataTracks = nil;
+    self.pendingMetadataTracks = 0;
     self.videoOutput = nil;
     self.audioOutput = nil;
     self.videoInput = nil;

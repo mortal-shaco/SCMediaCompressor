@@ -240,19 +240,25 @@ static BOOL sc_CanUseSpecifiedSDR(SCImageCompressionOptions *options, NSError *e
         BOOL compatible = type && (CFEqual(type, (__bridge CFStringRef)UTTypeJPEG.identifier) || (!livePhoto && (CFEqual(type, (__bridge CFStringRef)UTTypePNG.identifier) || (options.format==SCImageFormatHEIC && CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier)) || (options.format==SCImageFormatWebP && CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier)))));
         // singleImage：输入是否只包含一帧静态图片。
         BOOL singleImage = CGImageSourceGetCount(source) == 1;
+        // matchesFormat：在 ImageIO 源仍持有 UTI 时确定显式格式是否允许回退。
+        BOOL matchesFormat = options.format == SCImageFormatAutomatic ||
+            (type && ((options.format == SCImageFormatJPEG && CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier)) ||
+                      (options.format == SCImageFormatPNG && CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier)) ||
+                      (options.format == SCImageFormatHEIC && CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier)) ||
+                      (options.format == SCImageFormatWebP && CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier))));
         // reference：参考图像。
         CGImageRef reference = sc_Decode(source, MAX(target.width, target.height));
         CFRelease(source);
         if (!reference) return nil;
         options.sc_targetSize=CGSizeMake(CGImageGetWidth(reference),CGImageGetHeight(reference));
         // identifier：标识。
-        NSString *identifier = properties[(__bridge NSString *)kCGImagePropertyMakerAppleDictionary][@"17"];
+        NSString *identifier = properties[(__bridge NSString *)kCGImagePropertyMakerAppleDictionary][sc_LivePhotoMakerIdentifierKey];
         // metadata：元数据。
-        NSDictionary *metadata = identifier ? @{(__bridge NSString *)kCGImagePropertyMakerAppleDictionary : @{@"17":identifier}} : nil;
+        NSDictionary *metadata = identifier ? @{(__bridge NSString *)kCGImagePropertyMakerAppleDictionary : @{sc_LivePhotoMakerIdentifierKey:identifier}} : nil;
         // A compatible Live JPEG can keep its original pixels and pairing metadata too.
         // HEIC/HEIF, gain maps, resizing and orientation normalization still require conversion.
         // original：原始资源。
-        NSData *original = (options.format == SCImageFormatAutomatic || (options.format == SCImageFormatJPEG && type && CFEqual(type,(__bridge CFStringRef)UTTypeJPEG.identifier)) || (options.format == SCImageFormatPNG && type && CFEqual(type,(__bridge CFStringRef)UTTypePNG.identifier)) || (options.format == SCImageFormatHEIC && type && CFEqual(type,(__bridge CFStringRef)UTTypeHEIC.identifier)) || (options.format == SCImageFormatWebP && type && CFEqual(type,(__bridge CFStringRef)UTTypeWebP.identifier))) && !hdr && compatible && singleImage && (orientation == 0 || orientation == 1) && CGSizeEqualToSize(sourceSize, target) ? data : nil;
+        NSData *original = matchesFormat && !hdr && compatible && singleImage && (orientation == 0 || orientation == 1) && CGSizeEqualToSize(sourceSize, target) ? data : nil;
         // result：本次系统操作或编码结果。
         NSData *result = [self sc_encodeReference:reference original:original allowPNG:!livePhoto metadata:metadata options:options quality:quality];
         CGImageRelease(reference);
@@ -365,7 +371,7 @@ static BOOL sc_CanUseSpecifiedSDR(SCImageCompressionOptions *options, NSError *e
             BOOL good=sc_EvaluateJPEG(reference,jpeg,image,options,&score);
             if (step == 0) {
                 fallbackScore = score;
-                baseline=original ?: (best.length && (!good || !jpeg.length || best.length<jpeg.length) ? best : jpeg);
+                baseline=original ?: (best.length && (!good || best.length<jpeg.length) ? best : jpeg);
                 if(baseline==jpeg && score>=0)baselineScore=@(score);
             }
             if (good) {

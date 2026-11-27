@@ -2,7 +2,7 @@
 #import <ImageIO/ImageIO.h>
 NS_ASSUME_NONNULL_BEGIN
 /// 独立 Live Photo 配对工具，不依赖 HXPhotoPicker、相册权限或界面。
-/// 目标路径必须未占用；图片使用 JPEG，视频无二次编码地重新封装为 MOV。
+/// 目标路径必须未占用；配对完成后原子交付，保留其他任务已占用的目标。图片使用 JPEG，视频无二次编码地重新封装为 MOV。
 /// 成功时 error 为 nil；失败返回系统实际错误或本库配对阶段错误。
 @interface SCLivePhotoResourceWriter : NSObject
 /// 读取 JPEG 中已有的 Apple 配对标识。
@@ -31,7 +31,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param source 已压缩的视频文件。
 /// @param output 未占用的 MOV 目标。
 /// @param identifier 配对标识。
-/// @param cancellation 在封装队列接收取消动作，可保存后从任意线程重复调用。
+/// @param cancellation 在封装队列接收取消动作，可保存后从任意线程重复调用；终态后的调用直接返回。
 /// @param completion 封装队列上的唯一完成回调；取消时输出已经清理。
 + (void)sc_writePairedMovieAtURL:(NSURL *)source toURL:(NSURL *)output identifier:(NSString *)identifier cancellation:(nullable void (^)(dispatch_block_t cancel))cancellation completion:(void (^)(BOOL success, NSError * _Nullable error))completion;
 @end

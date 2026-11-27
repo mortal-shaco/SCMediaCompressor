@@ -15,32 +15,17 @@
 /// @param hdr 是否保留扩展亮度。
 /// @param referenceSpace SDR 固定源 RGB 色域；nil 沿用 HDR/既有采样路径。
 static void sc_SetFidelityEvaluatorInColorSpace(NSData *reference,CGSize size,SCImageCompressionOptions *options,BOOL hdr,id referenceSpace) {
-    options.sc_requiresFidelityEvaluation=YES;
-    // weakOptions：评估器不形成配置自持有，也不保留完整大图像素。
-    __weak SCImageCompressionOptions *weakOptions=options;
-    // data：配对或格式编码后实际待交付的候选字节。
-    options.sc_fidelityEvaluator=^NSNumber *(NSData *data){
-        // current：仅本轮存在时更新评估统计。
-        SCImageCompressionOptions *current=weakOptions;
-        if(!data||!reference||!current)return nil;
-        // started：包含真实候选解码、采样与保真计算。
-        NSTimeInterval started=current.sc_metrics?sc_ImageNow():0;
-        // source：真实最终写入文件的只读描述。
-        CGImageSourceRef source=CGImageSourceCreateWithData((__bridge CFDataRef)data,NULL);
-        // candidate：参考与候选共用最终滤波，不把不同缩略流程的误差当成压缩损失。
-        NSData *candidate=nil;
-        if(referenceSpace&&!hdr){
-            // decoded：配对后候选只解码一次，再绘制到源参考的色域。
-            CGImageRef decoded=source?CGImageSourceCreateImageAtIndex(source,0,NULL):NULL;
-            candidate=sc_ImagePixels(decoded,size,(__bridge CGColorSpaceRef)referenceSpace);
-            if(decoded)CGImageRelease(decoded);
-        }else candidate=sc_FidelitySourcePixels(source,size.width,size.height,hdr);
-        // score：未知结果绝不冒充达标。
-        double score=-1;sc_PassesFidelity(reference,candidate,size.width,size.height,current.quality,&score);
-        if(source)CFRelease(source);
-        if(current.sc_metrics)[current.sc_metrics sc_addDuration:sc_ImageNow()-started stage:SCImagePerformanceStageEvaluate];
-        return score<0?nil:@(score);
-    };
+    // source：真实最终写入文件，根据已有参考决定解码和滤波。
+    sc_SetFidelityEvaluatorWithDecoder(reference,size,options,^NSData *(CGImageSourceRef source) {
+        if (!referenceSpace || hdr) return sc_FidelitySourcePixels(source,size.width,size.height,hdr);
+        // decoded：配对后候选只解码一次，再绘制到源参考色域。
+        CGImageRef decoded = CGImageSourceCreateImageAtIndex(source,0,NULL);
+        if (!decoded) return nil;
+        // candidate：同域像素用于最终候选评分。
+        NSData *candidate = sc_ImagePixels(decoded,size,(__bridge CGColorSpaceRef)referenceSpace);
+        CGImageRelease(decoded);
+        return candidate;
+    });
 }
 
 /// 保留 HDR/原始源采样入口的既有色域语义。

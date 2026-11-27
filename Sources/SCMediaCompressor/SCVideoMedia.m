@@ -82,7 +82,7 @@ BOOL sc_IsLivePhotoAsset(AVAsset *asset) {
             CMFormatDescriptionRef format = (__bridge CMFormatDescriptionRef)description;
             if (format && CMFormatDescriptionGetMediaType(format) == kCMMediaType_Metadata &&
                 [(__bridge NSArray *)CMMetadataFormatDescriptionGetIdentifiers(format)
-                    containsObject:@"mdta/com.apple.quicktime.still-image-time"]) return YES;
+                    containsObject:sc_LiveStillImageTimeIdentifier()]) return YES;
         }
     }
     return NO;
@@ -101,7 +101,7 @@ NSString *sc_StatusName(AVAssetExportSessionStatus status) {
 
 /// 集中列出必须透传的 Live 关键帧时间与对齐元数据类型。
 NSDictionary *sc_LiveMetadataTypes(void) {
-    return @{@"mdta/com.apple.quicktime.still-image-time": (__bridge NSString *)kCMMetadataBaseDataType_SInt8,
+    return @{sc_LiveStillImageTimeIdentifier(): (__bridge NSString *)kCMMetadataBaseDataType_SInt8,
         (__bridge NSString *)kCMMetadataIdentifier_QuickTimeMetadataLivePhotoStillImageTransform: (__bridge NSString *)kCMMetadataBaseDataType_PerspectiveTransformF64,
         (__bridge NSString *)kCMMetadataIdentifier_QuickTimeMetadataLivePhotoStillImageTransformReferenceDimensions: (__bridge NSString *)kCMMetadataBaseDataType_DimensionsF32};
 }

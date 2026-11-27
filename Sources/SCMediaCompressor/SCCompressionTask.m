@@ -142,6 +142,13 @@
     if (callback) dispatch_async(dispatch_get_main_queue(),^{ callback(value); });
     [self.stateLock unlock];
 }
+/// 视频实际发布完成时才把主队列进度推到 100%。
+- (void)sc_reportDeliveredProgress:(void (^)(double))progress {
+    [self.stateLock lock];
+    self.fraction = 1;
+    [self.stateLock unlock];
+    if (progress) progress(1);
+}
 /// 原子取得终态，释放取消钩子，避免任务与编码器循环持有。
 /// @param completion 主队列唯一终态回调。
 - (BOOL)sc_finish:(void (^)(void))completion {

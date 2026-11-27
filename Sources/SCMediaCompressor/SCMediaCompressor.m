@@ -1,5 +1,6 @@
 #import "SCMediaCompressor.h"
 #import "SCInternal.h"
+#import "SCImageCodec.h"
 #import "SCSizePolicy.h"
 #import "SCLogger.h"
 #import "SCMediaCompressorError.h"
@@ -23,6 +24,59 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
     return [NSError errorWithDomain:SCMediaCompressorErrorDomain code:SCMediaCompressorErrorCoordinationFailed userInfo:@{NSLocalizedDescriptionKey:message,NSUnderlyingErrorKey:underlying}];
 }
 
+/// 绑定图片入口共用的任务钩子，配置副本仅弱持有任务。
+static SCImageCompressionOptions *sc_imageOptionsForTask(SCImageCompressionOptions *options, SCCompressionTask *task) {
+    // copy：本轮配置副本，后续绑定与归一化不会影响调用方。
+    SCImageCompressionOptions *copy = [options copy] ?: [SCImageCompressionOptions new];
+    // weakTask：配置和任务各自拥有生命周期。
+    __weak SCCompressionTask *weakTask = task;
+    copy.sc_cancellationCheck = ^{ return weakTask.cancelled; };
+    // bytes、converted：图片独立实际基准，Live 稍后会替换整组基准。
+    copy.sc_comparisonHandler = ^(unsigned long long bytes, BOOL converted) {
+        [weakTask sc_recordImageComparisonBytes:bytes converted:converted];
+        [weakTask sc_recordComparisonBytes:bytes converted:converted];
+    };
+    // status、quality、score：已有保真计算的最终诊断。
+    copy.sc_qualityHandler = ^(SCImageQualityStatus status, CGFloat quality, NSNumber *score) {
+        [weakTask sc_recordImageQuality:status requested:quality score:score];
+    };
+    // performance：实际图片阶段的不可变快照。
+    copy.sc_performanceHandler = ^(SCImagePerformance *performance) { [weakTask sc_recordImagePerformance:performance]; };
+    return copy;
+}
+
+/// 运行普通图片的异步任务，统一在终态锁定后发布摘要及错误。
+static SCCompressionTask *sc_startImageTask(SCImageCompressionOptions *options,
+                                           void (^progress)(double),
+                                           void (^completion)(NSData *, NSError *),
+                                           NSData *(^encode)(SCImageCompressionOptions *, NSError **)) {
+    // task：本轮独立进度、取消及统计。
+    SCCompressionTask *task = [SCCompressionTask sc_taskWithProgress:progress];
+    // copy：编码开始前在调用线程固定的配置。
+    SCImageCompressionOptions *copy = sc_imageOptionsForTask(options, task);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ @autoreleasepool {
+        [task sc_reportProgress:0.05];
+        // error：实际编码的失败原因。
+        NSError *error = nil;
+        // result：本轮图片编码的实际结果。
+        NSData *result = task.cancelled ? nil : encode(copy, &error);
+        if (result) [task sc_reportProgress:1];
+        [task sc_finish:^{
+            // cancelled：终态锁定后固定的取消状态。
+            BOOL cancelled = task.cancelled;
+            if (cancelled) {
+                [task sc_recordImageQuality:SCImageQualityStatusNotEvaluated requested:copy.quality score:nil];
+                [task sc_recordImagePerformance:sc_ImagePerformanceWithPairing(task.imagePerformance,nil,0,NO)];
+            }
+            // delivered：与最终统计使用同一份交付结果。
+            NSData *delivered = cancelled ? nil : result;
+            [task sc_publishOutcomeWithKind:SCCompressionMediaKindImage outputBytes:delivered.length succeeded:delivered != nil];
+            completion(delivered, cancelled ? sc_taskError(@"Cancelled",YES) : error);
+        }];
+    }});
+    return task;
+}
+
 @implementation SCMediaCompressor
 /// 配置唯一的内部日志分发器。
 /// @param handler 可选统计回调；nil 关闭日志。
@@ -36,33 +90,12 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
 /// @param progress 主队列进度回调。
 /// @param completion 主队列唯一完成回调。
 + (SCCompressionTask *)sc_compressImageData:(NSData *)data options:(SCImageCompressionOptions *)options progress:(void (^)(double))progress completion:(void (^)(NSData *, NSError *))completion {
-    // task：跨解码、编码和取消共享的唯一状态。
-    SCCompressionTask *task=[SCCompressionTask sc_taskWithProgress:progress];
-    // copy：本次配置快照。
-    SCImageCompressionOptions *copy=[options copy] ?: [SCImageCompressionOptions new];
-    // input：防止调用方传入 NSMutableData 后继续修改。
-    NSData *input=[data copy];
-    // weakTask：配置不反向强持有任务。
-    __weak SCCompressionTask *weakTask=task;
-    copy.sc_cancellationCheck=^{ return weakTask.cancelled; };
-    // bytes：有效基准体积；converted：是否经过转换。
-    copy.sc_comparisonHandler=^(unsigned long long bytes,BOOL converted){[weakTask sc_recordImageComparisonBytes:bytes converted:converted];[weakTask sc_recordComparisonBytes:bytes converted:converted];};
-    // status、quality、score：从已有图片评分复制诊断，不启动额外工作。
-    copy.sc_qualityHandler=^(SCImageQualityStatus status,CGFloat quality,NSNumber *score){[weakTask sc_recordImageQuality:status requested:quality score:score];};
-    // performance：冻结统计先写入任务，再调用外部性能接收器。
-    copy.sc_performanceHandler=^(SCImagePerformance *performance){[weakTask sc_recordImagePerformance:performance];};
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{ @autoreleasepool {
-        [task sc_reportProgress:0.05];
-        // error：编码错误；取消请求在终态优先处理。
-        NSError *error=nil;
-        // result：本次系统操作或编码结果。
-        NSData *result=task.cancelled ? nil : [SCImageCompressor sc_compressData:input options:copy error:&error];
-        if (task.cancelled) { result=nil; error=sc_taskError(@"Cancelled",YES); [task sc_recordImageQuality:SCImageQualityStatusNotEvaluated requested:copy.quality score:nil];[task sc_recordImagePerformance:sc_ImagePerformanceWithPairing(task.imagePerformance,nil,0,NO)]; }
-        if (result) [task sc_reportProgress:1];
-        [task sc_publishOutcomeWithKind:SCCompressionMediaKindImage outputBytes:result.length succeeded:result!=nil && !task.cancelled];
-        [task sc_finish:^{ if(task.cancelled && result){[task sc_recordImageQuality:SCImageQualityStatusNotEvaluated requested:copy.quality score:nil];[task sc_recordImagePerformance:sc_ImagePerformanceWithPairing(task.imagePerformance,nil,0,NO)];[task sc_publishOutcomeWithKind:SCCompressionMediaKindImage outputBytes:0 succeeded:NO];} completion(task.cancelled ? nil : result,task.cancelled ? sc_taskError(@"Cancelled",YES) : error); }];
-    }});
-    return task;
+    // input：调用方可在返回后修改原 NSMutableData。
+    NSData *input = [data copy];
+    // copy、error：本轮配置及实际编码错误。
+    return sc_startImageTask(options, progress, completion, ^NSData *(SCImageCompressionOptions *copy, NSError **error) {
+        return [SCImageCompressor sc_compressData:input options:copy error:error];
+    });
 }
 /// UIImage 的异步包装；编码算法与同步入口完全一致。
 /// @param image 原始图片。
@@ -70,30 +103,10 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
 /// @param progress 主队列阶段进度。
 /// @param completion 唯一终态回调。
 + (SCCompressionTask *)sc_compressImage:(UIImage *)image options:(SCImageCompressionOptions *)options progress:(void (^)(double))progress completion:(void (^)(NSData *,NSError *))completion {
-    // task：本轮图片任务。
-    SCCompressionTask *task=[SCCompressionTask sc_taskWithProgress:progress];
-    // copy：避免运行中修改外部配置。
-    SCImageCompressionOptions *copy=[options copy] ?: [SCImageCompressionOptions new];
-    // weakTask：候选循环仅检查任务状态，不造成循环持有。
-    __weak SCCompressionTask *weakTask=task; copy.sc_cancellationCheck=^{return weakTask.cancelled;};
-    // bytes：有效基准体积；converted：是否经过转换。
-    copy.sc_comparisonHandler=^(unsigned long long bytes,BOOL converted){[weakTask sc_recordImageComparisonBytes:bytes converted:converted];[weakTask sc_recordComparisonBytes:bytes converted:converted];};
-    // status、quality、score：从已有图片评分复制诊断，不启动额外工作。
-    copy.sc_qualityHandler=^(SCImageQualityStatus status,CGFloat quality,NSNumber *score){[weakTask sc_recordImageQuality:status requested:quality score:score];};
-    // performance：冻结统计先写入任务，再调用外部性能接收器。
-    copy.sc_performanceHandler=^(SCImagePerformance *performance){[weakTask sc_recordImagePerformance:performance];};
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{ @autoreleasepool {
-        [task sc_reportProgress:0.05];
-        // error：编码或取消结果。
-        NSError *error=nil;
-        // result：本次系统操作或编码结果。
-        NSData *result=task.cancelled ? nil : [SCImageCompressor sc_compressImage:image options:copy error:&error];
-        if (task.cancelled) {result=nil;error=sc_taskError(@"Cancelled",YES);[task sc_recordImageQuality:SCImageQualityStatusNotEvaluated requested:copy.quality score:nil];[task sc_recordImagePerformance:sc_ImagePerformanceWithPairing(task.imagePerformance,nil,0,NO)];}
-        if (result) [task sc_reportProgress:1];
-        [task sc_publishOutcomeWithKind:SCCompressionMediaKindImage outputBytes:result.length succeeded:result!=nil && !task.cancelled];
-        [task sc_finish:^{if(task.cancelled && result){[task sc_recordImageQuality:SCImageQualityStatusNotEvaluated requested:copy.quality score:nil];[task sc_recordImagePerformance:sc_ImagePerformanceWithPairing(task.imagePerformance,nil,0,NO)];[task sc_publishOutcomeWithKind:SCCompressionMediaKindImage outputBytes:0 succeeded:NO];}completion(task.cancelled ? nil : result,task.cancelled ? sc_taskError(@"Cancelled",YES) : error);}];
-    }});
-    return task;
+    // copy、error：本轮配置及实际编码错误。
+    return sc_startImageTask(options, progress, completion, ^NSData *(SCImageCompressionOptions *copy, NSError **error) {
+        return [SCImageCompressor sc_compressImage:image options:copy error:error];
+    });
 }
 /// 包装唯一视频会话，直接订阅编码进度而不创建轮询计时器。
 /// @param asset 视频或组合素材。
@@ -109,26 +122,29 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
     session.outputFileType=AVFileTypeMPEG4;
     if (configure) configure(session);
     session.outputURL=outputURL;
+    session.sc_defersPublication=YES;
     // value：值。
-    session.progressHandler=^(float value){ [task sc_reportProgress:value]; };
+    session.progressHandler=^(float value){ if (value < 1) [task sc_reportProgress:value]; };
     [session sc_exportAsynchronouslyWithCompletionHandler:^{
-        // success：本次写入是否成功。
-        BOOL success=session.status==AVAssetExportSessionStatusCompleted && !task.cancelled;
+        // success：编码成功后由高层终态决定是否发布。
+        BOOL success = session.status == AVAssetExportSessionStatusCompleted;
         [task sc_recordVideoStatistics:session durations:session.stageDurations];
-        if(success) [task sc_recordComparisonBytes:session.comparisonBytes converted:session.usesConvertedBaseline];
-        // error：取消优先于一般失败错误。
-        NSError *error=task.cancelled || session.status==AVAssetExportSessionStatusCancelled ? sc_taskError(@"Cancelled",YES) : session.error;
-        if (!success && !error) error=sc_taskError(@"Video export failed",NO);
-        if (task.cancelled && session.status==AVAssetExportSessionStatusCompleted) [session sc_removePublishedOutput];
-        if (success) [task sc_reportProgress:1];
-        // outputBytes：成功时读取实际交付文件。
-        unsigned long long outputBytes=success ? [NSFileManager.defaultManager attributesOfItemAtPath:outputURL.path error:nil].fileSize : 0;
+        if (success) [task sc_recordComparisonBytes:session.comparisonBytes converted:session.usesConvertedBaseline];
+        // error：编码失败原因；任务取消在终态优先。
+        NSError *error = session.status == AVAssetExportSessionStatusCancelled ? sc_taskError(@"Cancelled",YES) : session.error;
+        if (!success && !error) error = sc_taskError(@"Video export failed",NO);
+        // publish：仅操作本轮的私有文件，迟到取消无须删除公开路径。
+        BOOL (^publish)(BOOL, NSError **) = success ? [session sc_deferredPublication] : nil;
         [task sc_finish:^{
-            // delivered：终态已锁定，取消状态不再变化，摘要与回调使用同一结论。
-            BOOL delivered=success && !task.cancelled;
-            if (task.cancelled && success) [session sc_removePublishedOutput];
-            [task sc_publishOutcomeWithKind:SCCompressionMediaKindVideo outputBytes:delivered ? outputBytes : 0 succeeded:delivered];
-            completion(delivered ? outputURL : nil,task.cancelled ? sc_taskError(@"Cancelled",YES) : error);
+            // deliveryError：终态锁定后捕获真实发布错误。
+            NSError *deliveryError = task.cancelled ? sc_taskError(@"Cancelled",YES) : error;
+            // delivered：成功写入且任务仍应交付时才尝试原子发布。
+            BOOL delivered = publish && publish(!task.cancelled, &deliveryError);
+            // outputBytes：使用成功发布的真实文件字节。
+            unsigned long long outputBytes = delivered ? [NSFileManager.defaultManager attributesOfItemAtPath:outputURL.path error:nil].fileSize : 0;
+            [task sc_publishOutcomeWithKind:SCCompressionMediaKindVideo outputBytes:outputBytes succeeded:delivered];
+            if (delivered) [task sc_reportDeliveredProgress:progress];
+            completion(delivered ? outputURL : nil, deliveryError);
         }];
     }];
     // 先入队导出，再安装取消动作，避免取消先到达时被尚未启动的会话忽略。
@@ -146,22 +162,17 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
 + (SCCompressionTask *)sc_compressLivePhotoImageURL:(NSURL *)imageURL videoURL:(NSURL *)videoURL outputDirectory:(NSURL *)directory imageOptions:(SCImageCompressionOptions *)options configureVideo:(void (^)(SCVideoCompressor *))configure progress:(void (^)(double))progress completion:(void (^)(NSURL *,NSURL *,NSError *))completion {
     // task：跨图片、视频及封装阶段的唯一任务。
     SCCompressionTask *task=[SCCompressionTask sc_taskWithProgress:progress];
-    // copy：Live 共享的尺寸、质量与 HDR 从同一份快照读取。
-    SCImageCompressionOptions *copy=[options copy] ?: [SCImageCompressionOptions new];
-    // 在分派工作前统一归一化，避免图片与视频对非法质量采用不同默认值。
-    copy.quality=isfinite(copy.quality)?MIN(1,MAX(0,copy.quality)):sc_DefaultImageQuality;
-    // weakTask：候选编码阶段的取消检查。
-    __weak SCCompressionTask *weakTask=task; copy.sc_cancellationCheck=^{return weakTask.cancelled;};
-    // bytes：有效基准体积；converted：是否经过转换。
-    copy.sc_comparisonHandler=^(unsigned long long bytes,BOOL converted){[weakTask sc_recordImageComparisonBytes:bytes converted:converted];[weakTask sc_recordComparisonBytes:bytes converted:converted];};
-    // status、quality、score：从已有图片评分复制诊断，不启动额外工作。
-    copy.sc_qualityHandler=^(SCImageQualityStatus status,CGFloat quality,NSNumber *score){[weakTask sc_recordImageQuality:status requested:quality score:score];};
+    // copy：Live 图片与视频共享的尺寸、质量及 HDR 设置。
+    SCImageCompressionOptions *copy = sc_imageOptionsForTask(options, task);
+    copy.quality = sc_NormalizedQuality(copy.quality,sc_DefaultImageQuality);
     // imagePerformance：仅保存配对前不可变快照，最终成功/失败均从它合并，不重复计数。
     __block SCImagePerformance *imagePerformance=nil;
     // pairMetrics：只记录 JPEG 配对工作，不把跨视频等待计入图片耗时。
     SCImageMetrics *pairMetrics=[[SCImageMetrics alloc]sc_initWithInputBytes:0];
-    // performance：图片阶段完成后复制到任务，Live 收尾再补实际 JPEG 配对。
-    copy.sc_performanceHandler=^(SCImagePerformance *performance){imagePerformance=performance;[weakTask sc_recordImagePerformance:performance];};
+    // recordPerformance：沿用普通图片任务的快照记录方式。
+    void (^recordPerformance)(SCImagePerformance *) = copy.sc_performanceHandler;
+    // performance：Live 额外冻结配对前快照，供最终统计使用。
+    copy.sc_performanceHandler=^(SCImagePerformance *performance){imagePerformance=performance;recordPerformance(performance);};
     // folder：本操作唯一拥有的输出目录。
     NSURL *folder=[directory URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
     // fail：各阶段共用失败收尾，只删除本次创建的子目录。
@@ -227,6 +238,8 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
         NSURL *still=[folder URLByAppendingPathComponent:@"encoded.jpg"];
         if (!encoded || task.cancelled || ![encoded writeToURL:still options:NSDataWritingAtomic error:&error]) {fail(pairingError ? sc_taskErrorWithUnderlying(@"Live Photo JPEG pairing failed",task.cancelled,pairingError) : (error ?: sc_taskError(@"Live Photo image failed",task.cancelled)));return;}
         [NSFileManager.defaultManager removeItemAtURL:sizeSource error:nil];[NSFileManager.defaultManager removeItemAtURL:sizePhoto error:nil];
+        // sharesPairedImage：冻结相等关系，后续封装期间可提前释放大块图片字节。
+        BOOL sharesPairedImage = [imageBaseline isEqualToData:encoded];
         // imagePairElapsed：图片预算判断前已经执行的 JPEG 配对，单独纳入 Live pair。
         double imagePairElapsed=[imagePerformance.stageDurations[@"pair"]doubleValue];
         // imageElapsed：剔除 JPEG 配对，避免整组阶段重复计时。
@@ -264,7 +277,7 @@ static NSError *sc_taskErrorWithUnderlying(NSString *message,BOOL cancelled,NSEr
                     // baselineVideo：使用相同配对 ID 和 MOV 容器的基准视频。
                     NSURL *baselineVideo=[folder URLByAppendingPathComponent:@"baseline-video.mov"];
                     // imageReady：基准图片配对是否成功。
-                    [SCLivePhotoResourceWriter sc_writePairedJPEGAtURL:[imageBaseline isEqualToData:encoded] ? pairedImage : baselineStill toURL:baselinePhoto identifier:identifier metrics:pairMetrics completion:^(BOOL imageReady,NSError *baselineImageError){
+                    [SCLivePhotoResourceWriter sc_writePairedJPEGAtURL:sharesPairedImage ? pairedImage : baselineStill toURL:baselinePhoto identifier:identifier metrics:pairMetrics completion:^(BOOL imageReady,NSError *baselineImageError){
                         if(!imageReady || task.cancelled) {fail(sc_taskErrorWithUnderlying(@"Live Photo baseline pairing failed",task.cancelled,baselineImageError));return;}
                         // finishBaseline：已有配对字节可复用时直接进入相同的最终择小流程。
                         void (^finishBaseline)(BOOL,NSError *)=^(BOOL ready,NSError *baselineVideoError){

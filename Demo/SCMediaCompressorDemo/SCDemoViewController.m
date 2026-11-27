@@ -328,7 +328,7 @@ static NSString *sc_demoImagePerformanceText(SCImagePerformance *performance) {
         NSMutableString *result=[before mutableCopy];
         if(self.task.imageUsesConvertedBaseline && self.task.imageComparisonBytes){[result appendFormat:@"转换\n图片实际基准%@：%@\n",live?@"（配对后）":@"",sc_demoByteText(self.task.imageComparisonBytes)];}
         if(session.conversionBytes){if(!self.task.imageUsesConvertedBaseline)[result appendString:@"转换\n"];[result appendFormat:@"视频首次转换%@：%@\n",live?@"（配对前）":@"",sc_demoByteText(session.conversionBytes)];}
-        [result appendString:error?@"压缩失败":(live?@"压缩":(photo?@"压缩结果":@"压缩结果"))];
+        [result appendString:error?@"压缩失败":(live?@"压缩":@"压缩结果")];
         [result appendString:sc_demoImagePerformanceText(self.task.imagePerformance)];
         if(session.stageDurations.count){
             // durations：公开视频计时不拆分共享的转换和压缩编码。

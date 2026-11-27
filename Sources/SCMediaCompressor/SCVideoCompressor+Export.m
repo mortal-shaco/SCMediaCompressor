@@ -1,16 +1,16 @@
 #import "SCVideoCompressorInternal.h"
 
+@implementation SCVideoMetadataTrack
+@end
+
 @implementation SCVideoCompressor (SCExport)
 - (void)sc_startAttempt {
     self.sc_fidelityReferences=[NSMutableArray array];
     self.videoCompleted = NO;
     self.audioCompleted = NO;
     self.finishing = NO;
-    self.liveMetadataOutputs = [NSMutableArray array];
-    self.liveMetadataInputs = [NSMutableArray array];
-    self.completedMetadataInputs = [NSMutableSet set];
-    self.liveMetadataReaders = [NSMutableArray array];
-    self.liveMetadataWriters = [NSMutableArray array];
+    self.liveMetadataTracks = [NSMutableArray array];
+    self.pendingMetadataTracks = 0;
     // assetDuration：素材时长。
     CMTime assetDuration = self.sc_processingAsset.duration;
     if (!CMTIME_IS_NUMERIC(assetDuration) || CMTimeCompare(assetDuration, kCMTimeZero) <= 0 ||
@@ -19,7 +19,7 @@
         return;
     }
     // range：范围。
-    CMTimeRange range = self.timeRange;
+    CMTimeRange range = self.sc_configuration.timeRange;
     if (!CMTIME_IS_NUMERIC(range.start) || CMTimeCompare(range.start, kCMTimeZero) < 0) {
         [self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:sc_ExportError(@"Invalid export start time")];
         return;
@@ -56,9 +56,9 @@
         [self sc_failAttempt:error];
         return;
     }
-    self.encodingPassCount++;
+    self.sc_result.encodingPassCount++;
     if(!self.sc_compressionStartedAt) self.sc_compressionStartedAt=CFAbsoluteTimeGetCurrent();
-    self.status = AVAssetExportSessionStatusExporting;
+    [self sc_setStatus:AVAssetExportSessionStatusExporting];
     // generation：异步操作代数，用于隔离取消或复用后的旧回调。
     NSUInteger generation = self.generation;
     // weakSelf：避免异步块无意持有已结束会话。
@@ -79,21 +79,20 @@
             }
         }];
     }
-    // input：输入。
-    // index：索引。
-    // stop：枚举提前结束标志。
-    [self.liveMetadataInputs enumerateObjectsUsingBlock:^(AVAssetWriterInput *input, NSUInteger index, BOOL *stop) {
-        // output：输出。
-        AVAssetReaderTrackOutput *output = self.liveMetadataOutputs[index];
-        [input requestMediaDataWhenReadyOnQueue:self.inputQueue usingBlock:^{
-            // session：会话。
-            __strong typeof(weakSelf) session = weakSelf;
-            if (session && session.generation == generation && !session.finishing &&
-                ![session.completedMetadataInputs containsObject:input]) {
-                [session sc_encodeReadySamplesFromOutput:output toInput:input];
+    // track：独立分组的读写状态，异步回调只弱持有轨道和会话。
+    for (SCVideoMetadataTrack *track in self.liveMetadataTracks) {
+        // weakTrack：防止输入反向持有其所属轨道。
+        __weak SCVideoMetadataTrack *weakTrack = track;
+        [track.writer.assetWriterInput requestMediaDataWhenReadyOnQueue:self.inputQueue usingBlock:^{
+            // session：仅当前轮次仍存活时继续处理。
+            SCVideoCompressor *session = weakSelf;
+            // activeTrack：临时持有当前轨道，避免回调与输入组成持有环。
+            SCVideoMetadataTrack *activeTrack = weakTrack;
+            if (session.generation == generation && !session.finishing && activeTrack && !activeTrack.finished) {
+                [session sc_encodeLiveMetadataTrack:activeTrack];
             }
         }];
-    }];
+    }
 }
 
 - (NSError *)sc_prepareExportSession {
@@ -101,12 +100,12 @@
     NSError *error = nil;
     self.reader = [AVAssetReader assetReaderWithAsset:self.sc_processingAsset error:&error];
     if (!self.reader) return error ?: sc_ExportError(@"Could not create reader");
-    self.writer = [AVAssetWriter assetWriterWithURL:self.activeOutputURL fileType:self.outputFileType error:&error];
+    self.writer = [AVAssetWriter assetWriterWithURL:self.activeOutputURL fileType:self.sc_configuration.outputFileType error:&error];
     if (!self.writer) return error ?: sc_ExportError(@"Could not create writer");
     self.reader.timeRange = self.exportRange;
-    self.writer.shouldOptimizeForNetworkUse = self.shouldOptimizeForNetworkUse;
+    self.writer.shouldOptimizeForNetworkUse = self.sc_configuration.shouldOptimizeForNetworkUse;
     // metadata：元数据。
-    NSMutableArray *metadata = [self.metadata mutableCopy] ?: [NSMutableArray array];
+    NSMutableArray *metadata = [self.sc_configuration.metadata mutableCopy] ?: [NSMutableArray array];
     // Keep the Live Photo pairing ID; do not copy HDR/color metadata into the SDR output.
     if (![AVMetadataItem metadataItemsFromArray:metadata filteredByIdentifier:AVMetadataIdentifierQuickTimeMetadataContentIdentifier].count) {
         [metadata addObjectsFromArray:[AVMetadataItem metadataItemsFromArray:self.sc_processingAsset.metadata
@@ -115,11 +114,14 @@
     self.writer.metadata = metadata;
 
     // settings：设置。
-    NSMutableDictionary *settings = [(self.videoOutputSettings ?: [self sc_configVideoOutput]) mutableCopy];
-    if(self.livePhoto || sc_IsLivePhotoAsset(self.asset)) {
-        // shared：图片配置决定 Live 最大画幅，高级视频设置不能突破该上限或放大源。
-        NSDictionary *shared=[self sc_configVideoOutput];
-        if([settings[AVVideoWidthKey]doubleValue]>[shared[AVVideoWidthKey]doubleValue] || [settings[AVVideoHeightKey]doubleValue]>[shared[AVVideoHeightKey]doubleValue])return sc_VideoConfigurationError(@"Live video dimensions exceed the shared image configuration");
+    NSMutableDictionary *settings = [(self.sc_configuration.videoOutputSettings ?: [self sc_configVideoOutput]) mutableCopy];
+    if (self.sc_exportsLivePhoto && self.sc_configuration.videoOutputSettings) {
+        // shared：只在显式设置覆盖默认设置时计算 Live 实际几何上限。
+        NSDictionary *shared = [self sc_configVideoOutput];
+        if ([settings[AVVideoWidthKey] doubleValue] > [shared[AVVideoWidthKey] doubleValue] ||
+            [settings[AVVideoHeightKey] doubleValue] > [shared[AVVideoHeightKey] doubleValue]) {
+            return sc_VideoConfigurationError(@"Live video dimensions exceed the shared image configuration");
+        }
     }
     // 按实际策略转换像素并写入一致色彩；默认 SDR 路径保持原样。
     settings[AVVideoColorPropertiesKey] = self.sc_exportColorProperties;
@@ -133,8 +135,8 @@
         return sc_ExportError(@"Unsupported video output settings");
     }
     // composition：方向缩放及本轮动态范围的视频合成配置。
-    AVMutableVideoComposition *composition = self.videoComposition
-        ? [self.videoComposition mutableCopy] : [self sc_buildVideoCompositionWithSettings:settings];
+    AVMutableVideoComposition *composition = self.sc_configuration.videoComposition
+        ? [self.sc_configuration.videoComposition mutableCopy] : [self sc_buildVideoCompositionWithSettings:settings];
     composition.colorPrimaries = self.sc_exportColorProperties[AVVideoColorPrimariesKey];
     composition.colorTransferFunction = self.sc_exportColorProperties[AVVideoTransferFunctionKey];
     composition.colorYCbCrMatrix = self.sc_exportColorProperties[AVVideoYCbCrMatrixKey];
@@ -145,17 +147,17 @@
     // dimensions：真实编码尺寸。
     CMVideoDimensions dimensions=format?CMVideoFormatDescriptionGetDimensions(format):(CMVideoDimensions){0,0};
     // direct：不改变方向、裁剪、HDR 转换、自定义合成或帧率规则，只移除无必要的全帧 RGB 中转。
-    BOOL direct=!self.videoComposition&&!self.delegate&&!self.fullFrameAsset&&[self.sc_processingAsset tracksWithMediaType:AVMediaTypeVideo].count==1&&
+    BOOL direct=!self.sc_configuration.videoComposition&&!self.sc_configuration.delegate&&!self.fullFrameAsset&&[self.sc_processingAsset tracksWithMediaType:AVMediaTypeVideo].count==1&&
         CGAffineTransformIsIdentity(sourceTrack.preferredTransform)&&sourceTrack.nominalFrameRate<=self.exportMaximumFrameRate&&
         CMTimeGetSeconds(sourceTrack.minFrameDuration)+.0001>=1/self.exportMaximumFrameRate&&
         (self.sc_exportsHDR||![self.sc_processingAsset tracksWithMediaCharacteristic:AVMediaCharacteristicContainsHDRVideo].count)&&
         dimensions.height>0&&fabs((double)dimensions.width/dimensions.height-[settings[AVVideoWidthKey]doubleValue]/[settings[AVVideoHeightKey]doubleValue])<.001&&
         CGRectEqualToRect(CMVideoFormatDescriptionGetCleanAperture(format,YES),CGRectMake(0,0,dimensions.width,dimensions.height))&&
         CGSizeEqualToSize(CMVideoFormatDescriptionGetPresentationDimensions(format,YES,YES),CGSizeMake(dimensions.width,dimensions.height));
-    if(direct)self.videoOutput=[AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:sourceTrack outputSettings:self.videoInputSettings?:[self sc_configVideoInput]];
+    if(direct)self.videoOutput=[AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:sourceTrack outputSettings:self.sc_configuration.videoInputSettings?:[self sc_configVideoInput]];
     else {
         // output：需要真实几何/方向/色彩处理的素材继续使用既有合成器。
-        AVAssetReaderVideoCompositionOutput *output=[AVAssetReaderVideoCompositionOutput assetReaderVideoCompositionOutputWithVideoTracks:[self.sc_processingAsset tracksWithMediaType:AVMediaTypeVideo] videoSettings:self.videoInputSettings?:[self sc_configVideoInput]];
+        AVAssetReaderVideoCompositionOutput *output=[AVAssetReaderVideoCompositionOutput assetReaderVideoCompositionOutputWithVideoTracks:[self.sc_processingAsset tracksWithMediaType:AVMediaTypeVideo] videoSettings:self.sc_configuration.videoInputSettings?:[self sc_configVideoInput]];
         output.videoComposition=composition;self.videoOutput=output;
     }
     self.videoOutput.alwaysCopiesSampleData = NO;
@@ -165,7 +167,7 @@
     self.videoInput.expectsMediaDataInRealTime = NO;
     if (![self.writer canAddInput:self.videoInput]) return sc_ExportError(@"Could not add video writer input");
     [self.writer addInput:self.videoInput];
-    if ([self.delegate respondsToSelector:@selector(sc_exportSession:renderFrame:withPresentationTime:toBuffer:)]) {
+    if ([self.sc_configuration.delegate respondsToSelector:@selector(sc_exportSession:renderFrame:withPresentationTime:toBuffer:)]) {
         // attributes：像素缓冲池格式与尺寸参数。
         NSDictionary *attributes = @{
             (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
@@ -189,15 +191,15 @@
         } else {
             // output：输出。
             AVAssetReaderAudioMixOutput *output = [AVAssetReaderAudioMixOutput assetReaderAudioMixOutputWithAudioTracks:audioTracks
-                audioSettings:self.audioInputSettings ?: [self sc_configAudioInput]];
-            output.audioMix = self.audioMix;
+                audioSettings:self.sc_configuration.audioInputSettings ?: [self sc_configAudioInput]];
+            output.audioMix = self.sc_configuration.audioMix;
             self.audioOutput = output;
         }
         self.audioOutput.alwaysCopiesSampleData = NO;
         if (![self.reader canAddOutput:self.audioOutput]) return sc_ExportError(@"Could not add audio reader output");
         [self.reader addOutput:self.audioOutput];
         // audioSettings：音频设置。
-        NSDictionary *audioSettings = copyAudio ? nil : (self.audioOutputSettings ?: [self sc_configAudioOutput]);
+        NSDictionary *audioSettings = copyAudio ? nil : (self.sc_configuration.audioOutputSettings ?: [self sc_configAudioOutput]);
         if (audioSettings && ![self.writer canApplyOutputSettings:audioSettings forMediaType:AVMediaTypeAudio]) {
             return sc_ExportError(@"Unsupported audio output settings");
         }
@@ -242,10 +244,12 @@
         if (![self.reader canAddOutput:output] || ![self.writer canAddInput:input]) return sc_ExportError(@"Could not preserve Live Photo metadata");
         [self.reader addOutput:output];
         [self.writer addInput:input];
-        [self.liveMetadataOutputs addObject:output];
-        [self.liveMetadataInputs addObject:input];
-        [self.liveMetadataReaders addObject:[AVAssetReaderOutputMetadataAdaptor assetReaderOutputMetadataAdaptorWithAssetReaderTrackOutput:output]];
-        [self.liveMetadataWriters addObject:[AVAssetWriterInputMetadataAdaptor assetWriterInputMetadataAdaptorWithAssetWriterInput:input]];
+        // metadataTrack：一条轨道的读取、写入与完成状态共同保存。
+        SCVideoMetadataTrack *metadataTrack = [SCVideoMetadataTrack new];
+        metadataTrack.reader = [AVAssetReaderOutputMetadataAdaptor assetReaderOutputMetadataAdaptorWithAssetReaderTrackOutput:output];
+        metadataTrack.writer = [AVAssetWriterInputMetadataAdaptor assetWriterInputMetadataAdaptorWithAssetWriterInput:input];
+        [self.liveMetadataTracks addObject:metadataTrack];
+        self.pendingMetadataTracks++;
     }
     if (![self.writer startWriting]) return self.writer.error ?: sc_ExportError(@"Could not start writer");
     [self.writer startSessionAtSourceTime:self.exportRange.start];
@@ -254,9 +258,6 @@
 }
 
 - (void)sc_encodeReadySamplesFromOutput:(AVAssetReaderOutput *)output toInput:(AVAssetWriterInput *)input {
-    // metadataIndex：元数据轨道在并行读写器中的索引。
-    NSUInteger metadataIndex = [self.liveMetadataInputs indexOfObjectIdenticalTo:input];
-    if (metadataIndex != NSNotFound) { [self sc_encodeLiveMetadataAtIndex:metadataIndex]; return; }
     // samples：采样集合。
     NSUInteger samples = 0;
     while (self.runningSession && !self.finishing && input.isReadyForMoreMediaData) {
@@ -271,8 +272,7 @@
                 [input markAsFinished];
                 if (output == self.videoOutput) self.videoCompleted = YES;
                 else if (output == self.audioOutput) self.audioCompleted = YES;
-                else [self.completedMetadataInputs addObject:input];
-                if (self.videoCompleted && self.audioCompleted && self.completedMetadataInputs.count == self.liveMetadataInputs.count) [self sc_finish];
+                [self sc_finishWhenTracksComplete];
                 return;
             }
             // presentationTime：显示时间。
@@ -287,7 +287,7 @@
                 // result：本次系统操作或编码结果。
                 CVReturn result = CVPixelBufferPoolCreatePixelBuffer(NULL, self.videoPixelBufferAdaptor.pixelBufferPool, &rendered);
                 if (result == kCVReturnSuccess && rendered) {
-                    [self.delegate sc_exportSession:self renderFrame:CMSampleBufferGetImageBuffer(sample)
+                    [self.sc_configuration.delegate sc_exportSession:self renderFrame:CMSampleBufferGetImageBuffer(sample)
                             withPresentationTime:relativeTime toBuffer:rendered];
                     // The writer session starts at exportRange.start, so append the original source PTS.
                     [self sc_captureFidelityReference:rendered time:relativeTime];
@@ -306,15 +306,14 @@
             if (output == self.videoOutput) {
                 // fraction：本轮已发布的单调进度。
                 double fraction = fmin(1, fmax(0, CMTimeGetSeconds(relativeTime) / self.exportDuration));
-                self.progress = fmaxf(self.progress, self.usesConvertedBaseline ? .3+.65*fraction : .95*fraction);
+                [self sc_setProgress:fmaxf(self.sc_result.progress, self.sc_result.usesConvertedBaseline ? .3+.65*fraction : .95*fraction)];
             }
             if (++samples >= sc_SampleBatchSize) {
                 // generation：异步操作代数，用于隔离取消或复用后的旧回调。
                 NSUInteger generation = self.generation;
                 dispatch_async(self.inputQueue, ^{
                     if (self.generation == generation && self.runningSession && !self.finishing &&
-                        !((output == self.videoOutput && self.videoCompleted) || (output == self.audioOutput && self.audioCompleted) ||
-                          [self.completedMetadataInputs containsObject:input])) {
+                        !((output == self.videoOutput && self.videoCompleted) || (output == self.audioOutput && self.audioCompleted))) {
                         [self sc_encodeReadySamplesFromOutput:output toInput:input];
                     }
                 });
@@ -325,13 +324,10 @@
     if (self.writer.status == AVAssetWriterStatusFailed) [self sc_failAttempt:self.writer.error];
 }
 
-- (void)sc_encodeLiveMetadataAtIndex:(NSUInteger)index {
-    // input：输入。
-    AVAssetWriterInput *input = self.liveMetadataInputs[index];
-    // reader：读取器。
-    AVAssetReaderOutputMetadataAdaptor *reader = self.liveMetadataReaders[index];
-    // writer：写入器。
-    AVAssetWriterInputMetadataAdaptor *writer = self.liveMetadataWriters[index];
+/// 处理一条 Live 定时元数据轨道，本轮收尾前只保留允许的字段。
+- (void)sc_encodeLiveMetadataTrack:(SCVideoMetadataTrack *)track {
+    // input：当前轨道使用的 writer 输入。
+    AVAssetWriterInput *input = track.writer.assetWriterInput;
     // allowedTypes：允许保留的Live元数据类型集合。
     NSDictionary *allowedTypes = sc_LiveMetadataTypes();
     // count：数量。
@@ -340,15 +336,17 @@
         @autoreleasepool {
             // group：当前定时元数据分组。
             AVTimedMetadataGroup *group = nil;
-            @try { group = [reader nextTimedMetadataGroup]; }
+            @try { group = [track.reader nextTimedMetadataGroup]; }
             // exception：格式解析或媒体处理异常。
             @catch (NSException *exception) { [self sc_failAttempt:sc_ExportError(@"Could not decode Live Photo metadata")]; return; }
             if (!group) {
                 if (self.reader.status == AVAssetReaderStatusFailed || self.writer.status == AVAssetWriterStatusFailed) {
                     [self sc_failAttempt:self.writer.error ?: self.reader.error]; return;
                 }
-                [input markAsFinished]; [self.completedMetadataInputs addObject:input];
-                if (self.videoCompleted && self.audioCompleted && self.completedMetadataInputs.count == self.liveMetadataInputs.count) [self sc_finish];
+                [input markAsFinished];
+                track.finished = YES;
+                self.pendingMetadataTracks--;
+                [self sc_finishWhenTracksComplete];
                 return;
             }
             // items：项目集合。
@@ -358,7 +356,7 @@
             if (items.count) {
                 // appended：写入器是否接受当前采样。
                 BOOL appended = NO;
-                @try { appended = [writer appendTimedMetadataGroup:[[AVTimedMetadataGroup alloc] initWithItems:items timeRange:group.timeRange]]; }
+                @try { appended = [track.writer appendTimedMetadataGroup:[[AVTimedMetadataGroup alloc] initWithItems:items timeRange:group.timeRange]]; }
                 // exception：格式解析或媒体处理异常。
                 @catch (NSException *exception) { [self sc_failAttempt:sc_ExportError(@"Invalid Live Photo metadata")]; return; }
                 if (!appended) { [self sc_failAttempt:self.writer.error ?: sc_ExportError(@"Could not append Live Photo metadata")]; return; }
@@ -368,7 +366,7 @@
                 NSUInteger generation = self.generation;
                 dispatch_async(self.inputQueue, ^{
                     if (self.generation == generation && self.runningSession && !self.finishing &&
-                        ![self.completedMetadataInputs containsObject:input]) [self sc_encodeLiveMetadataAtIndex:index];
+                        !track.finished) [self sc_encodeLiveMetadataTrack:track];
                 });
                 return;
             }
@@ -399,9 +397,6 @@
     transform = CGAffineTransformConcat(transform, CGAffineTransformMakeTranslation(
         (target.width - fabs(bounds.size.width) * scale) / 2, (target.height - fabs(bounds.size.height) * scale) / 2));
     composition.renderSize = target;
-    composition.colorPrimaries = self.sc_exportColorProperties[AVVideoColorPrimariesKey];
-    composition.colorTransferFunction = self.sc_exportColorProperties[AVVideoTransferFunctionKey];
-    composition.colorYCbCrMatrix = self.sc_exportColorProperties[AVVideoYCbCrMatrixKey];
     // frameRate：帧速率。
     double frameRate = track.nominalFrameRate;
     // requestedRate：requested速率。
@@ -420,6 +415,11 @@
     instruction.layerInstructions = @[ layer ];
     composition.instructions = @[ instruction ];
     return composition;
+}
+
+/// 音视频及定时元数据全部写完后统一开始封装收尾。
+- (void)sc_finishWhenTracksComplete {
+    if (self.videoCompleted && self.audioCompleted && !self.pendingMetadataTracks) [self sc_finish];
 }
 
 - (void)sc_finish {

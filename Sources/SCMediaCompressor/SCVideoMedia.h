@@ -29,6 +29,19 @@ FOUNDATION_EXPORT NSDictionary * _Nullable sc_HDRVideoColorProperties(AVAsset *a
 FOUNDATION_EXPORT BOOL sc_HDRVideoMatches(AVAsset *asset, NSDictionary *colors);
 /// 读取 clean aperture 与像素宽高比后的实际显示尺寸。
 FOUNDATION_EXPORT CGSize sc_PresentationSize(AVAssetTrack *track);
+/// 缺少系统公开键的 Live 静态帧时间字段。
+static NSString *const sc_LiveStillImageTimeKey = @"com.apple.quicktime.still-image-time";
+/// 配对、识别和过滤共用同一个带键空间的标识。
+static inline NSString *sc_LiveStillImageTimeIdentifier(void) {
+    // identifier：系统用同一键和值空间组成的固定标识。
+    static NSString *identifier;
+    // once：只生成一次不可变标识。
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        identifier = [AVMetadataItem identifierForKey:sc_LiveStillImageTimeKey keySpace:AVMetadataKeySpaceQuickTimeMetadata];
+    });
+    return identifier;
+}
 /// 根据 still-image-time 元数据识别 Live 配对视频。
 FOUNDATION_EXPORT BOOL sc_IsLivePhotoAsset(AVAsset *asset);
 /// 将系统导出状态映射为稳定统计文本。

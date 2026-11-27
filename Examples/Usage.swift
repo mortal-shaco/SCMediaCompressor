@@ -61,7 +61,7 @@ func sc_example(data: Data, asset: AVAsset, imageURL: URL, videoURL: URL, parent
         // SDR 源始终 H264；HDR 源开启 preservesHDR 后自动使用 HEVC Main10。
         // MOV 使用 .mov 并匹配输出扩展名；Live 最终视频固定 MOV。
     }, progress: nil) { url, error in
-        // url：成功文件，由调用方清理；error：失败原因。
+        // url：已原子发布的成功文件，由调用方清理；error：失败原因。
         if url != nil, let videoTask {
             print("video outcome saved", videoTask.outcome?.savedRatio as Any,
                   "encodes", videoTask.outcome?.videoEncodingPassCount as Any,

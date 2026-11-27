@@ -52,31 +52,38 @@ static BOOL sc_encodedHasHDR(NSData *data) {
     // hdr：候选是否仍保留 HDR。
     BOOL hdr=sc_sourceContainsHDR(source);if(source)CFRelease(source);return hdr;
 }
-/// 在同一 HDR 源参考中建立候选评估器；高层已有参考时直接复用。
-/// @param reference 有界浮点源像素，不使用任何有损候选作参考。
-/// @param size 固定评估尺寸。
-/// @param options 本轮配置和共享统计。
-static void sc_setHDRCandidateReference(NSData *reference, CGSize size, SCImageCompressionOptions *options) {
-    options.sc_requiresFidelityEvaluation=YES;
-    // weakOptions：评估器不形成配置自持有。
-    __weak SCImageCompressionOptions *weakOptions=options;
+/// 从实际候选解码同域像素，共用保真分数、耗时和对象生命周期。
+void sc_SetFidelityEvaluatorWithDecoder(NSData *reference, CGSize size, SCImageCompressionOptions *options,
+                                       NSData *(^decode)(CGImageSourceRef)) {
+    options.sc_requiresFidelityEvaluation = YES;
+    // weakOptions：评估器弱持有本轮配置，避免配置自持有。
+    __weak SCImageCompressionOptions *weakOptions = options;
     // data：实际待比较的编码字节。
-    options.sc_fidelityEvaluator=^NSNumber *(NSData *data){
-        // current：只累加本轮仍存在的统计。
-        SCImageCompressionOptions *current=weakOptions;
-        if(!current||!reference||!data)return nil;
-        // started：实际解码与保真评估计入评估阶段。
-        NSTimeInterval started=current.sc_metrics?sc_ImageNow():0;
-        // source：候选真实文件描述。
-        CGImageSourceRef source=CGImageSourceCreateWithData((__bridge CFDataRef)data,NULL);
-        // candidate：与原参考使用相同浮点采样。
-        NSData *candidate=sc_FidelitySourcePixels(source,size.width,size.height,YES);
-        // score：不能评估时明确未知，不把编码成功当作达标。
-        double score=-1;sc_PassesFidelity(reference,candidate,size.width,size.height,current.quality,&score);
-        if(source)CFRelease(source);
-        if(current.sc_metrics)[current.sc_metrics sc_addDuration:sc_ImageNow()-started stage:SCImagePerformanceStageEvaluate];
-        return score<0?nil:@(score);
+    options.sc_fidelityEvaluator = ^NSNumber *(NSData *data) {
+        // current：仅本轮存活时更新已有统计。
+        SCImageCompressionOptions *current = weakOptions;
+        if (!current || !reference || !data) return nil;
+        // started：候选解码和评分共同计入评估阶段。
+        NSTimeInterval started = current.sc_metrics ? sc_ImageNow() : 0;
+        // source：候选编码的只读描述。
+        CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data,NULL);
+        // candidate：由各路径按参考图的原有色域和滤波采样。
+        NSData *candidate = source ? decode(source) : nil;
+        if (source) CFRelease(source);
+        // score：无法评估时保持未知。
+        double score = -1;
+        sc_PassesFidelity(reference,candidate,size.width,size.height,current.quality,&score);
+        if (current.sc_metrics) [current.sc_metrics sc_addDuration:sc_ImageNow()-started stage:SCImagePerformanceStageEvaluate];
+        return score < 0 ? nil : @(score);
     };
+}
+
+/// 为 HDR 建立同源浮点评估器。
+static void sc_setHDRCandidateReference(NSData *reference, CGSize size, SCImageCompressionOptions *options) {
+    // source：需要用 HDR 像素语义解码的候选。
+    sc_SetFidelityEvaluatorWithDecoder(reference,size,options,^NSData *(CGImageSourceRef source) {
+        return sc_FidelitySourcePixels(source,size.width,size.height,YES);
+    });
 }
 /// 只扫描目标参考的 alpha，不改变 HDR 颜色或为格式选择额外编码。
 /// @param image 已经完成几何处理的源参考。
@@ -128,6 +135,8 @@ static NSData *sc_selectAutomaticHDR(CGSize target, BOOL requiresAlpha, SCImageC
     NSData *best=nil;NSNumber *bestScore=nil;
     // lastError：仅全部不可用时发布，成功不携带落选格式的错误。
     NSError *lastError=nil;
+    // fatalError：用池外强引用保留真实失败，退出局部释放池后再写出参。
+    NSError *fatalError=nil;
     // format：当前支持真实 HDR 保留的实现集合，显式格式与 Live 不进入此循环。
     for(NSNumber *format in @[@(SCImageFormatHEIC),@(SCImageFormatJPEG)]){
         if(options.sc_cancellationCheck&&options.sc_cancellationCheck()){options.sc_fidelityEvaluator=nil;return nil;}
@@ -141,7 +150,10 @@ static NSData *sc_selectAutomaticHDR(CGSize target, BOOL requiresAlpha, SCImageC
             NSData *candidate=encode(candidateOptions,&candidateError);
             if(options.sc_cancellationCheck&&options.sc_cancellationCheck()){options.sc_fidelityEvaluator=nil;return nil;}
             if(!candidate){
-                if(candidateError&&(![candidateError.domain isEqual:SCMediaCompressorErrorDomain]||candidateError.code!=SCMediaCompressorErrorConfigurationConflict)){if(error)*error=candidateError;return nil;}
+                if(candidateError&&(![candidateError.domain isEqual:SCMediaCompressorErrorDomain]||candidateError.code!=SCMediaCompressorErrorConfigurationConflict)){
+                    fatalError = candidateError;
+                    break;
+                }
                 lastError=candidateError;continue;
             }
             if(!sc_validHDRCandidate(candidate,target,candidateOptions.format,requiresAlpha)){lastError=sc_hdrError(@"HDR candidate violates format, dimensions or orientation constraints");continue;}
@@ -163,6 +175,10 @@ static NSData *sc_selectAutomaticHDR(CGSize target, BOOL requiresAlpha, SCImageC
             if(choose){best=candidate;bestScore=score;}
             if(options.sc_metrics)[options.sc_metrics sc_addDuration:sc_ImageNow()-selectionStarted stage:SCImagePerformanceStageFinish];
         }
+    }
+    if (fatalError) {
+        if (error) *error = fatalError;
+        return nil;
     }
     options.sc_fidelityScore=bestScore;
     if(!options.sc_imageFinalizer)options.sc_fidelityEvaluator=nil;

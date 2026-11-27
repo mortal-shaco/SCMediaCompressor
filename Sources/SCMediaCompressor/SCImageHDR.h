@@ -18,3 +18,7 @@ FOUNDATION_EXPORT NSData *sc_preserveHDRUIImage(UIImage *image, CGSize target, S
 
 /// 构造 HDR 配置冲突或系统能力不足错误。
 FOUNDATION_EXPORT NSError *sc_hdrError(NSString *message);
+
+/// 共享候选解码评分的持有、计时与统计逻辑，解码保持各入口的色域语义。
+FOUNDATION_EXPORT void sc_SetFidelityEvaluatorWithDecoder(NSData *reference, CGSize size, SCImageCompressionOptions *options,
+                                                         NSData *(^decode)(CGImageSourceRef));

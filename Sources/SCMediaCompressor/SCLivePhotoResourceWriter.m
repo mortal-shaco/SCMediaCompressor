@@ -2,17 +2,11 @@
 #import "SCLivePhotoResourceWriter.h"
 #import "SCImageHDR.h"
 #import "SCInternal.h"
+#import "SCSizePolicy.h"
+#import "SCVideoMedia.h"
 #import "SCMediaCompressorError.h"
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-/// sc_FigAppleMakerNote_AssetIdentifier：FigAppleMakerNote素材标识。
-static NSString *const sc_FigAppleMakerNote_AssetIdentifier = @"17";
-/// sc_KeySpaceQuickTimeMetadata：键空间Quick时间元数据。
-static NSString *const sc_KeySpaceQuickTimeMetadata = @"mdta";
-/// sc_KeyStillImageTime：键静态帧图片时间。
-static NSString *const sc_KeyStillImageTime = @"com.apple.quicktime.still-image-time";
-/// sc_KeyContentIdentifier：键内容标识。
-static NSString *const sc_KeyContentIdentifier = @"com.apple.quicktime.content.identifier";
 /// 保留系统原始错误；ImageIO 未提供错误对象时给出可读的本库失败。
 /// @param message 无系统错误时的失败说明。
 /// @param underlying 系统实际返回的错误，不伪造底层原因。
@@ -33,17 +27,22 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
 }
 + (AVAssetWriterInputMetadataAdaptor *)sc_metadataSetAdapter {
     // identifier：标识。
-    NSString *identifier = [sc_KeySpaceQuickTimeMetadata stringByAppendingFormat:@"/%@", sc_KeyStillImageTime];
+    NSString *identifier = sc_LiveStillImageTimeIdentifier();
     // spec：元数据格式描述的配置字典。
     const NSDictionary *spec = @{
-        (__bridge_transfer NSString *)kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier : identifier,
-        (__bridge_transfer NSString *)
-        kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType : @"com.apple.metadata.datatype.int8"
+        (__bridge NSString *)kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier : identifier,
+        (__bridge NSString *)
+        kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType : (__bridge NSString *)kCMMetadataBaseDataType_SInt8
     };
     // desc：系统创建的元数据格式描述。
-    CMFormatDescriptionRef desc;
-    CMMetadataFormatDescriptionCreateWithMetadataSpecifications(kCFAllocatorDefault, kCMMetadataFormatType_Boxed,
-                                                                (__bridge CFArrayRef) @[ spec ], &desc);
+    CMFormatDescriptionRef desc = NULL;
+    // status：格式描述无法创建时返回失败，不使用未初始化的 CF 引用。
+    OSStatus status = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(kCFAllocatorDefault, kCMMetadataFormatType_Boxed,
+                                                                                 (__bridge CFArrayRef) @[spec], &desc);
+    if (status != noErr || !desc) {
+        if (desc) CFRelease(desc);
+        return nil;
+    }
     // input：输入。
     AVAssetWriterInput *input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeMetadata
                                                                    outputSettings:nil
@@ -58,7 +57,7 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
     NSDictionary *properties = source ? CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, NULL)) : nil;
     if (source) CFRelease(source);
     // identifier：标识。
-    id identifier = properties[(__bridge NSString *)kCGImagePropertyMakerAppleDictionary][sc_FigAppleMakerNote_AssetIdentifier];
+    id identifier = properties[(__bridge NSString *)kCGImagePropertyMakerAppleDictionary][sc_LivePhotoMakerIdentifierKey];
     return [identifier isKindOfClass:NSString.class] && [identifier length] ? identifier : nil;
 }
 
@@ -79,6 +78,17 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
     if (!sourceURL.isFileURL || !outputURL.isFileURL ||
         [sourceURL.URLByResolvingSymlinksInPath.path isEqualToString:outputURL.URLByResolvingSymlinksInPath.path] ||
         [NSFileManager.defaultManager fileExistsAtPath:outputURL.path]) { finished(NO,nil); return; }
+    // folder：配对过程只写入并清理本轮独占目录。
+    NSURL *folder = sc_CreateOutputFolder(outputURL, &error);
+    if (!folder) {
+        // code：沿用 JPEG 写入的 Cocoa 文件错误域，同时保留真实 POSIX 原因。
+        NSInteger code = error.code == ENOENT ? NSFileNoSuchFileError :
+            (error.code == EACCES || error.code == EPERM ? NSFileWriteNoPermissionError : NSFileWriteUnknownError);
+        finished(NO,[NSError errorWithDomain:NSCocoaErrorDomain code:code userInfo:@{NSUnderlyingErrorKey:error, NSURLErrorKey:outputURL}]);
+        return;
+    }
+    // workingURL：ImageIO 或原字节复制的私有目标。
+    NSURL *workingURL = [folder URLByAppendingPathComponent:@"paired.jpg"];
     // source：原始素材或像素缓冲。
     CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)sourceURL, NULL);
     if (source && CGImageSourceGetType(source) && CFEqual(CGImageSourceGetType(source), (__bridge CFStringRef)UTTypeJPEG.identifier) &&
@@ -88,12 +98,14 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
         // data：编码数据。
         NSData *data = [NSData dataWithContentsOfURL:sourceURL options:NSDataReadingMappedIfSafe error:&error];
         // success：本次写入是否成功。
-        BOOL success = data.length && [data writeToURL:outputURL options:NSDataWritingAtomic error:&error];
+        BOOL success = data.length && [data writeToURL:workingURL options:0 error:&error] &&
+            sc_PublishOutput(workingURL, outputURL, &error);
+        [NSFileManager.defaultManager removeItemAtURL:folder error:nil];
         finished(success,error);
         return;
     }
     // destination：本次输出的 ImageIO 目标。
-    CGImageDestinationRef destination = CGImageDestinationCreateWithURL((__bridge CFURLRef)outputURL, (__bridge CFStringRef)UTTypeJPEG.identifier, 1, NULL);
+    CGImageDestinationRef destination = CGImageDestinationCreateWithURL((__bridge CFURLRef)workingURL, (__bridge CFStringRef)UTTypeJPEG.identifier, 1, NULL);
     // success：本次写入是否成功。
     BOOL success = NO;
     if (source && CGImageSourceGetCount(source) > 0 && destination && assetIdentifier.length) {
@@ -101,7 +113,7 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
         NSMutableDictionary *properties = [CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, NULL)) mutableCopy] ?: [NSMutableDictionary dictionary];
         // maker：Apple MakerNote字典的可写副本。
         NSMutableDictionary *maker = [properties[(__bridge NSString *)kCGImagePropertyMakerAppleDictionary] mutableCopy] ?: [NSMutableDictionary dictionary];
-        maker[sc_FigAppleMakerNote_AssetIdentifier] = assetIdentifier;
+        maker[sc_LivePhotoMakerIdentifierKey] = assetIdentifier;
         properties[(__bridge NSString *)kCGImagePropertyMakerAppleDictionary] = maker;
         properties[(__bridge NSString *)kCGImageDestinationLossyCompressionQuality] = @1;
         properties[(__bridge NSString *)kCGImageDestinationPreserveGainMap]=@YES;
@@ -114,7 +126,8 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
     }
     if (source) CFRelease(source);
     if (destination) CFRelease(destination);
-    if (!success) [NSFileManager.defaultManager removeItemAtURL:outputURL error:nil];
+    if (success) success = sc_PublishOutput(workingURL, outputURL, &error);
+    [NSFileManager.defaultManager removeItemAtURL:folder error:nil];
     finished(success,error);
 }
 
@@ -141,10 +154,15 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
         AVURLAsset *asset = [AVURLAsset assetWithURL:sourceURL];
         // error：错误。
         NSError *error = nil;
+        // folder：封装失败或取消只清理本轮拥有的目录。
+        NSURL *folder = sc_CreateOutputFolder(outputURL, &error);
+        if (!folder) { if (completion) completion(NO,error); return; }
+        // workingURL：写入器实际使用的私有路径。
+        NSURL *workingURL = [folder URLByAppendingPathComponent:@"paired.mov"];
         // reader：读取器。
         AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
         // writer：写入器。
-        AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:outputURL fileType:AVFileTypeQuickTimeMovie error:&error];
+        AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:workingURL fileType:AVFileTypeQuickTimeMovie error:&error];
         // outputs：按轨道排序的读取器输出集合。
         NSMutableArray<AVAssetReaderTrackOutput *> *outputs = [NSMutableArray array];
         // inputs：与读取器对应的写入器输入集合。
@@ -176,7 +194,7 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
                 if ([track.mediaType isEqualToString:AVMediaTypeMetadata]) {
                     // identifiers：元数据类型标识集合。
                     NSArray *identifiers = (__bridge NSArray *)CMMetadataFormatDescriptionGetIdentifiers(format);
-                    if ([identifiers containsObject:@"mdta/com.apple.quicktime.still-image-time"]) hasStillTime = YES;
+                    if ([identifiers containsObject:sc_LiveStillImageTimeIdentifier()]) hasStillTime = YES;
                 }
             }
         }
@@ -185,7 +203,7 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
         if (!hasStillTime && writer && !error) {
             // Legacy files may have lost their capture timestamp. Use a middle frame only for that fallback.
             fallback = [self sc_metadataSetAdapter];
-            if ([writer canAddInput:fallback.assetWriterInput]) [writer addInput:fallback.assetWriterInput];
+            if (fallback && [writer canAddInput:fallback.assetWriterInput]) [writer addInput:fallback.assetWriterInput];
             else error = [NSError errorWithDomain:AVFoundationErrorDomain code:AVErrorExportFailed userInfo:nil];
         }
         // metadata：元数据。
@@ -200,7 +218,7 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
             // failure：取消清理之前的真实失败原因。
             NSError *failure=error ?: sc_MoviePairingError(writer,reader);
             [reader cancelReading]; [writer cancelWriting];
-            [NSFileManager.defaultManager removeItemAtURL:outputURL error:nil];
+            [NSFileManager.defaultManager removeItemAtURL:folder error:nil];
             if (completion) completion(NO,failure);
             return;
         }
@@ -208,7 +226,7 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
         if (![reader startReading]) {
             // failure：读取器启动失败的原始原因。
             NSError *failure=sc_MoviePairingError(writer,reader);
-            [writer cancelWriting]; [NSFileManager.defaultManager removeItemAtURL:outputURL error:nil];
+            [writer cancelWriting]; [NSFileManager.defaultManager removeItemAtURL:folder error:nil];
             if (completion) completion(NO,failure);
             return;
         }
@@ -217,15 +235,15 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
             // failure：取消清理之前的真实失败原因。
             NSError *failure=sc_MoviePairingError(writer,reader);
             [reader cancelReading]; [writer cancelWriting];
-            [NSFileManager.defaultManager removeItemAtURL:outputURL error:nil];
+            [NSFileManager.defaultManager removeItemAtURL:folder error:nil];
             if (completion) completion(NO,failure);
             return;
         }
         if (fallback) {
             // item：项目。
             AVMutableMetadataItem *item = [AVMutableMetadataItem metadataItem];
-            item.key = sc_KeyStillImageTime; item.keySpace = sc_KeySpaceQuickTimeMetadata;
-            item.value = @0; item.dataType = @"com.apple.metadata.datatype.int8";
+            item.key = sc_LiveStillImageTimeKey; item.keySpace = AVMetadataKeySpaceQuickTimeMetadata;
+            item.value = @0; item.dataType = (__bridge NSString *)kCMMetadataBaseDataType_SInt8;
             // time：时间。
             CMTime time = CMTimeMultiplyByFloat64(asset.duration, 0.5);
             // range：范围。
@@ -236,7 +254,7 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
             if (!appended) {
                 // failure：取消清理之前的真实失败原因。
                 NSError *failure=sc_MoviePairingError(writer,reader);
-                [reader cancelReading]; [writer cancelWriting]; [NSFileManager.defaultManager removeItemAtURL:outputURL error:nil];
+                [reader cancelReading]; [writer cancelWriting]; [NSFileManager.defaultManager removeItemAtURL:folder error:nil];
                 if (completion) completion(NO,failure);
                 return;
             }
@@ -247,6 +265,8 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
         NSLock *cancellationLock = [NSLock new];
         // cancelled：受锁保护的取消请求。
         __block BOOL cancelled = NO;
+        // cancellationClosed：与请求使用同一把锁，已定结果不接受迟到取消。
+        __block BOOL cancellationClosed = NO;
         // isCancelled：在每个采样边界观察取消，避免轨道持续就绪时饿死取消队列。
         BOOL (^isCancelled)(void) = ^BOOL {
             [cancellationLock lock];
@@ -255,22 +275,43 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
             [cancellationLock unlock];
             return value;
         };
-        // finish：停止后才删除文件并交付一次，防止高层提前清理输入目录。
+        // cancelOnQueue：仅封装队列访问，终态清空以断开句柄对本次读写和回调的持有。
+        __block dispatch_block_t cancelOnQueue = nil;
+        // finish：停止读写、发布实际结果，并且只交付一次。
         void (^finish)(BOOL,NSError *) = ^(BOOL success,NSError *failure) {
             if (completed) return;
             completed = YES;
+            [cancellationLock lock];
+            cancellationClosed = YES;
+            // wasCancelled：发布前最后一次读取接受过的取消请求。
+            BOOL wasCancelled = cancelled;
+            [cancellationLock unlock];
+            cancelOnQueue = nil;
+            if (success && wasCancelled) {
+                success = NO;
+                failure = [NSError errorWithDomain:NSCocoaErrorDomain code:NSUserCancelledError userInfo:nil];
+            }
+            if (success) success = sc_PublishOutput(workingURL, outputURL, &failure);
             if (!success) {
                 if (reader.status == AVAssetReaderStatusReading) [reader cancelReading];
                 if (writer.status == AVAssetWriterStatusWriting) [writer cancelWriting];
-                [NSFileManager.defaultManager removeItemAtURL:outputURL error:nil];
             }
+            [NSFileManager.defaultManager removeItemAtURL:folder error:nil];
             if (completion) completion(success,failure);
         };
-        // cancel：可从任意线程调用；finishWriting 已启动时等待其回调后清理。
+        cancelOnQueue = ^{
+            if (!finishing) finish(NO,[NSError errorWithDomain:NSCocoaErrorDomain code:NSUserCancelledError userInfo:nil]);
+        };
+        // cancel：跨线程只记录请求，已完成的封装没有可执行的取消动作。
         dispatch_block_t cancel = ^{
-            [cancellationLock lock]; cancelled = YES; [cancellationLock unlock];
+            [cancellationLock lock];
+            if (cancellationClosed || cancelled) { [cancellationLock unlock]; return; }
+            cancelled = YES;
+            [cancellationLock unlock];
             dispatch_async(queue, ^{
-                if (!finishing) finish(NO,[NSError errorWithDomain:NSCocoaErrorDomain code:NSUserCancelledError userInfo:nil]);
+                // action：当前队列上的取消动作快照，执行时允许清空共享引用。
+                dispatch_block_t action = cancelOnQueue;
+                if (action) action();
             });
         };
         if (cancellation) cancellation(cancel);
@@ -331,8 +372,8 @@ static NSError *sc_MoviePairingError(AVAssetWriter *writer,AVAssetReader *reader
 + (AVMetadataItem *)sc_metaDataSet:(NSString *)assetIdentifier {
     // item：项目。
     AVMutableMetadataItem *item = [AVMutableMetadataItem metadataItem];
-    item.key = sc_KeyContentIdentifier;
-    item.keySpace = sc_KeySpaceQuickTimeMetadata;
+    item.key = AVMetadataQuickTimeMetadataKeyContentIdentifier;
+    item.keySpace = AVMetadataKeySpaceQuickTimeMetadata;
     item.value = assetIdentifier;
     item.dataType = @"com.apple.metadata.datatype.UTF-8";
     return item;

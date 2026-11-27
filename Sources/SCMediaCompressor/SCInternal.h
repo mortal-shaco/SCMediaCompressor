@@ -2,6 +2,8 @@
 #import "SCImageCompressionOptions.h"
 #import "SCVideoCompressor.h"
 #import "SCLivePhotoResourceWriter.h"
+/// JPEG MakerApple 中跨压缩与配对共享的标识键。
+static NSString *const sc_LivePhotoMakerIdentifierKey = @"17";
 /// 图片按次配置与便捷入口共用的固定默认质量。
 FOUNDATION_EXPORT const CGFloat sc_DefaultImageQuality;
 /// 内部计时类别；名称只在快照构造模块定义，跨模块不复制诊断键。
@@ -66,8 +68,10 @@ FOUNDATION_EXPORT SCImagePerformance *sc_ImagePerformanceWithPairing(SCImagePerf
 @end
 /// Live 封装阶段需要保留实际视频基准，普通导出不额外留下文件。
 @interface SCVideoCompressor (SCComparison)
-/// 仅移除本轮已发布且身份未被替换的文件。
-- (void)sc_removePublishedOutput;
+/// 高层视频先锁定终态，再发布最终文件。
+@property (nonatomic) BOOL sc_defersPublication;
+/// 捕获与本轮私有文件绑定的发布及清理动作。
+- (BOOL (^)(BOOL, NSError **))sc_deferredPublication;
 /// 调用方提供的未占用基准路径，生命周期由 Live 任务目录管理。
 @property (nonatomic, copy) NSURL *sc_comparisonOutputURL;
 /// 最终 MOV 改选原内容基线时同步最终保真诊断。
@@ -100,6 +104,8 @@ FOUNDATION_EXPORT SCImagePerformance *sc_ImagePerformanceWithPairing(SCImagePerf
 - (void)sc_setCancellationHandler:(void (^)(void))handler;
 /// 上报单调进度，在主队列通知调用方。
 - (void)sc_reportProgress:(double)progress;
+/// 主队列确认文件已经发布后完成进度；终态锁已阻止取消。
+- (void)sc_reportDeliveredProgress:(void (^)(double))progress;
 /// 原子安排唯一终态回调，在主队列执行，返回本次是否成功取得终态。
 - (BOOL)sc_finish:(void (^)(void))completion;
 @end

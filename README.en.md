@@ -28,14 +28,14 @@ Install 1.1.1 from CocoaPods Specs:
 pod 'SCMediaCompressor', '1.1.1', :modular_headers => true
 ```
 
-Install 1.1.1 from its fixed Git tag:
+Install 1.1.2 from its fixed Git tag:
 
 ```ruby
 platform :ios, '15.0'
-pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.1', :modular_headers => true
+pod 'SCMediaCompressor', :git => 'https://github.com/mortal-shaco/SCMediaCompressor.git', :tag => '1.1.2', :modular_headers => true
 ```
 
-To follow the latest public code, replace `:tag => '1.1.1'` with `:branch => 'main'`. Run `pod install`, then open your project's `.xcworkspace`.
+To follow the latest public code, replace `:tag => '1.1.2'` with `:branch => 'main'`. Run `pod install`, then open your project's `.xcworkspace`.
 
 ```objc
 #import <SCMediaCompressor/SCMediaCompressor.h>
@@ -248,7 +248,9 @@ The app supplies photo-library usage descriptions and requests permissions. The 
 
 Errors may come from this library, AVFoundation or the file system. Cancellation uses `NSCocoaErrorDomain / NSUserCancelledError`. In the `SCMediaCompressor` domain, code 1 indicates image input/encoding failure, code 2 indicates task/pairing failure, and code 3 indicates unsupported format/HDR configuration. A lack of size savings returns the compliant baseline successfully. Inspect the error domain, code and description.
 
-For Live Photo MOV pairing, use `sc_writePairedMovieAtURL:toURL:identifier:cancellation:completion:` to register a cancellation action callable from any thread. Completion runs once on the rewrap queue after reading/writing has stopped and cancelled output has been removed. Use the legacy `header` callback to access readers/writers synchronously within that callback only.
+For Live Photo MOV pairing, use `sc_writePairedMovieAtURL:toURL:identifier:cancellation:completion:` to register a cancellation action callable from any thread. Completion runs once on the rewrap queue after reading/writing has stopped and cancelled output has been removed. Use the legacy `header` callback to access readers/writers synchronously within that callback only. Standalone JPEG/MOV pairing publishes atomically. The first publisher claims the destination. Calling the cancellation action after completion returns immediately.
+
+Low-level video export delivers progress before completion for each run. When reusing an export session, read that run’s status, error, output URL, and diagnostics inside its completion callback.
 
 ## Output behavior and limits
 

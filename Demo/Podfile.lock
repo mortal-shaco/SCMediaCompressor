@@ -6,7 +6,7 @@ PODS:
   - libwebp/sharpyuv (1.6.0)
   - libwebp/webp (1.6.0):
     - libwebp/sharpyuv
-  - SCMediaCompressor (1.1.1):
+  - SCMediaCompressor (1.1.2):
     - libwebp/mux (~> 1.6)
 
 DEPENDENCIES:
@@ -22,7 +22,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   libwebp: af5937a13536ef73f3784d69cc342b98961acf33
-  SCMediaCompressor: d98a16aa8c25b366cf467c5df062d785f1dd55f8
+  SCMediaCompressor: 26d2e2d626087fdcf0c0967634af74da9ef05ba4
 
 PODFILE CHECKSUM: 00fd1e9e67de7a650b1e3e55a8efe7ad3429c236
 

@@ -1,14 +1,102 @@
 #import "SCVideoCompressorInternal.h"
-#import <unistd.h>
-#import <errno.h>
+#import "SCSizePolicy.h"
+
+@implementation SCVideoExportResult
+/// 防止未交付的高层结果留下私有目录。
+- (void)dealloc {
+    if (_stagedFolder) [NSFileManager.defaultManager removeItemAtURL:_stagedFolder error:nil];
+}
+@end
+
+@implementation SCVideoExportConfiguration
+@end
+
+/// 位于完成回调动态作用域内的轮次结果，外层回调返回后恢复。
+@interface SCVideoCallbackContext : NSObject
+/// 当前执行回调的导出器。
+@property (nonatomic, weak) SCVideoCompressor *session;
+/// 当前回调对应的最终诊断。
+@property (nonatomic, strong) SCVideoExportResult *result;
+/// 同一线程上的外层回调。
+@property (nonatomic, strong) SCVideoCallbackContext *previous;
+@end
+
+@implementation SCVideoCallbackContext
+@end
+
+/// 完成回调线程字典的内部键。
+static NSString *const sc_VideoCallbackContextKey = @"io.github.mortal-shaco.scmedia.video.callback";
 
 @implementation SCVideoCompressor
-/// 读取本轮捕获的保真请求，不受后续复用配置影响。
-- (double)sc_requestedQuality {return self.exportVideoQuality;}
-/// 读取与图片相同语义的有效门槛。
-- (double)sc_effectiveQualityTarget {return sc_EffectiveFidelityTarget(self.exportVideoQuality);}
 
-@synthesize progress = _progress;
+@synthesize outputURL = _outputURL;
+@synthesize exportVideoQuality = _exportVideoQuality;
+
+/// 只在当前完成回调内读取对应轮次的结果。
+- (SCVideoExportResult *)sc_callbackResult {
+    // context：支持调用方运行嵌套事件循环时恢复外层上下文。
+    SCVideoCallbackContext *context = NSThread.currentThread.threadDictionary[sc_VideoCallbackContextKey];
+    for (; context; context = context.previous) {
+        if (context.session == self) return context.result;
+    }
+    return nil;
+}
+
+/// 在调用方读取公开属性时固定到这次交付结果。
+- (void)sc_deliverResult:(SCVideoExportResult *)result handler:(dispatch_block_t)handler {
+    // dictionary：作用域局限在实际执行回调的线程。
+    NSMutableDictionary *dictionary = NSThread.currentThread.threadDictionary;
+    // context：本轮回调的结果及外层作用域。
+    SCVideoCallbackContext *context = [SCVideoCallbackContext new];
+    context.session = self;
+    context.result = result;
+    context.previous = dictionary[sc_VideoCallbackContextKey];
+    dictionary[sc_VideoCallbackContextKey] = context;
+    @try {
+        handler();
+    } @finally {
+        if (context.previous) dictionary[sc_VideoCallbackContextKey] = context.previous;
+        else [dictionary removeObjectForKey:sc_VideoCallbackContextKey];
+    }
+}
+
+/// 保持原有属性选择子，在完成块内切换到该轮诊断。
+#define SC_VIDEO_GETTER(type, selector, value) \
+    - (type)selector { SCVideoExportResult *result = self.sc_callbackResult; return value; }
+#define SC_VIDEO_RESULT_GETTER(type, selector, property) \
+    SC_VIDEO_GETTER(type, selector, (result ?: self.sc_result).property)
+
+SC_VIDEO_RESULT_GETTER(AVAssetExportSessionStatus, status, status)
+SC_VIDEO_RESULT_GETTER(NSError *, sc_error, error)
+SC_VIDEO_RESULT_GETTER(float, sc_progress, progress)
+/// KVO 通过公开键 progress 读取轮次进度。
+SC_VIDEO_RESULT_GETTER(float, progress, progress)
+SC_VIDEO_RESULT_GETTER(double, sc_requestedQuality, requestedQuality)
+SC_VIDEO_RESULT_GETTER(unsigned long long, comparisonBytes, comparisonBytes)
+SC_VIDEO_RESULT_GETTER(unsigned long long, conversionBytes, conversionBytes)
+SC_VIDEO_RESULT_GETTER(NSUInteger, encodingPassCount, encodingPassCount)
+SC_VIDEO_RESULT_GETTER(NSDictionary *, stageDurations, stageDurations)
+SC_VIDEO_RESULT_GETTER(BOOL, usesConvertedBaseline, usesConvertedBaseline)
+SC_VIDEO_RESULT_GETTER(NSTimeInterval, qualityEvaluationDuration, qualityEvaluationDuration)
+SC_VIDEO_RESULT_GETTER(SCVideoQualityStatus, qualityStatus, qualityStatus)
+SC_VIDEO_RESULT_GETTER(NSNumber *, fidelityScore, fidelityScore)
+SC_VIDEO_RESULT_GETTER(NSNumber *, candidateFidelityScore, candidateFidelityScore)
+SC_VIDEO_RESULT_GETTER(NSUInteger, qualitySampleCount, qualitySampleCount)
+
+/// 完成块外仍返回调用方当前设定的输出路径。
+SC_VIDEO_GETTER(NSURL *, outputURL, result ? result.outputURL : _outputURL)
+
+#undef SC_VIDEO_RESULT_GETTER
+#undef SC_VIDEO_GETTER
+
+/// 根据对应轮次的请求质量计算统一门槛。
+- (double)sc_effectiveQualityTarget { return sc_EffectiveFidelityTarget(self.requestedQuality); }
+
+/// 更新导出队列的保真请求，供本轮编码和终态诊断共用。
+- (void)sc_setExportVideoQuality:(double)quality {
+    _exportVideoQuality = quality;
+    self.sc_result.requestedQuality = quality;
+}
 
 + (double)sc_defaultVideoQuality { return sc_DefaultVideoQuality; }
 
@@ -30,12 +118,46 @@
         _outputFileType=AVFileTypeMPEG4;
         _timeRange = CMTimeRangeMake(kCMTimeZero, kCMTimePositiveInfinity);
         _inputQueue = dispatch_queue_create("io.github.mortal-shaco.scmedia.video", DISPATCH_QUEUE_SERIAL);
-        _status = AVAssetExportSessionStatusUnknown;
+        _sc_result = [SCVideoExportResult new];
     }
     return self;
 }
 
+/// 在入队前固定本轮的配置，顺序复用时允许下一轮设置不同参数。
+- (SCVideoExportConfiguration *)sc_captureConfiguration {
+    // configuration：每次调用独享的配置快照。
+    SCVideoExportConfiguration *configuration = [SCVideoExportConfiguration new];
+    configuration.defersPublication = self.sc_defersPublication;
+    configuration.maximumSize = self.maximumSize;
+    configuration.videoQuality = self.videoQuality;
+    configuration.maximumFrameRate = self.maximumFrameRate;
+    configuration.videoBitRate = self.videoBitRate;
+    configuration.preservesHDR = self.preservesHDR;
+    configuration.livePhoto = self.livePhoto;
+    configuration.livePhotoImageOptions = self.livePhotoImageOptions;
+    configuration.outputFileType = self.outputFileType;
+    configuration.timeRange = self.timeRange;
+    configuration.videoComposition = self.videoComposition;
+    configuration.audioMix = self.audioMix;
+    configuration.videoInputSettings = self.videoInputSettings;
+    configuration.videoOutputSettings = self.videoOutputSettings;
+    configuration.audioInputSettings = self.audioInputSettings;
+    configuration.audioOutputSettings = self.audioOutputSettings;
+    configuration.metadata = self.metadata;
+    configuration.shouldOptimizeForNetworkUse = self.shouldOptimizeForNetworkUse;
+    configuration.delegate = self.delegate;
+    return configuration;
+}
+
 - (void)sc_exportAsynchronouslyWithCompletionHandler:(void (^)(void))handler {
+    // destination：公开 setter 的最新请求，避免从旧回调的结果视图捕获目标。
+    NSURL *destination = _outputURL;
+    // configuration：在调用线程捕获本轮设置。
+    SCVideoExportConfiguration *configuration = [self sc_captureConfiguration];
+    // callbackQueue：固定本轮结果和进度的交付位置。
+    dispatch_queue_t callbackQueue = self.callbackQueue;
+    // progressHandler：固定本轮进度接收器。
+    void (^progressHandler)(float) = self.progressHandler;
     dispatch_async(self.inputQueue, ^{
         if (self.runningSession) {
             [self sc_completeWithStatus:AVAssetExportSessionStatusCancelled error:nil];
@@ -45,29 +167,32 @@
         NSUInteger generation = self.generation;
         self.completionHandler = handler;
         self.runningSession = self;
-        self.activeOutputURL = self.outputURL;
-        self.sc_destinationURL=self.outputURL; self.sc_publishedIdentity=nil;
+        // result：先填充固定值，再发布本轮诊断对象。
+        SCVideoExportResult *result = [SCVideoExportResult new];
+        result.outputURL = destination;
+        result.stageDurations = @{};
+        self.sc_result = result;
+        self.sc_configuration = configuration;
+        self.sc_hasCallbackQueue = callbackQueue != nil;
+        self.sc_exportProgressHandler = progressHandler;
+        self.sc_deliveryQueue = (callbackQueue || progressHandler) ?
+            dispatch_queue_create_with_target("io.github.mortal-shaco.scmedia.video.delivery", DISPATCH_QUEUE_SERIAL,
+                                              callbackQueue ?: dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0)) : nil;
+        self.activeOutputURL = destination;
         self.retryCount = 0;
-        self.comparisonBytes = 0; self.usesConvertedBaseline = NO;
-        self.encodingPassCount=0; self.stageDurations=@{};
         self.sc_compressionStartedAt=0; self.sc_compressionFinishedAt=0;
         self.sc_sourceBaselineURL=nil; self.sc_requiresEncodingConversion=NO;
-        self.conversionBytes=0;self.fidelityScore=nil;self.candidateFidelityScore=nil;self.qualityStatus=SCVideoQualityStatusNotEvaluated;self.qualitySampleCount=0;self.qualityEvaluationDuration=0;
 
-        self.exportVideoQuality = self.videoQuality;
-        self.exportMaximumSize = self.maximumSize;
-        self.exportLivePhotoImageOptions = [self.livePhotoImageOptions copy] ?: [SCImageCompressionOptions new];
+        self.exportVideoQuality = self.sc_configuration.videoQuality;
+        self.exportMaximumSize = self.sc_configuration.maximumSize;
+        self.exportLivePhotoImageOptions = [self.sc_configuration.livePhotoImageOptions copy] ?: [SCImageCompressionOptions new];
         self.exportCodec = AVVideoCodecTypeH264;
-        self.sc_exportPreservesHDR=self.preservesHDR;self.sc_exportsHDR=NO;self.sc_exportColorProperties=sc_SDRColorProperties();
-        self.exportMaximumFrameRate = isfinite(self.maximumFrameRate) && self.maximumFrameRate > 0 ? self.maximumFrameRate : 30;
-        self.exportBitRate = MAX(0, self.videoBitRate);
+        self.sc_exportPreservesHDR=self.sc_configuration.preservesHDR;self.sc_exportsHDR=NO;self.sc_exportColorProperties=sc_SDRColorProperties();
+        self.exportMaximumFrameRate = isfinite(self.sc_configuration.maximumFrameRate) && self.sc_configuration.maximumFrameRate > 0 ? self.sc_configuration.maximumFrameRate : 30;
+        self.exportBitRate = MAX(0, self.sc_configuration.videoBitRate);
 
-
-
-
-        self.progress = 0;
-        self.exportError = nil;
-        self.status = AVAssetExportSessionStatusWaiting;
+        [self sc_setProgress:0];
+        [self sc_setStatus:AVAssetExportSessionStatusWaiting];
         self.logIdentifier = [NSUUID.UUID.UUIDString substringToIndex:8];
         self.exportStartedAt = CFAbsoluteTimeGetCurrent();
         // inputURL：输入URL。
@@ -75,7 +200,6 @@
         // inputBytes：输入字节。
         NSNumber *inputBytes = inputURL.isFileURL ? [NSFileManager.defaultManager attributesOfItemAtPath:inputURL.path error:nil][NSFileSize] : nil;
         self.inputFileBytes = inputBytes.unsignedLongLongValue;
-        self.comparisonBytes = 0;
         sc_log(@"[SCVideoCompressor][%@] before inputBytes=%@ inputKB=%@ inputMB=%@", self.logIdentifier,
             inputBytes ?: @"unknown(composition/remote)", inputBytes ? [NSString stringWithFormat:@"%.2f", inputBytes.doubleValue / 1024.0] : @"n/a",
             inputBytes ? [NSString stringWithFormat:@"%.3f", inputBytes.doubleValue / (1024.0 * 1024.0)] : @"n/a");
@@ -92,15 +216,14 @@
             self.activeOutputURL = nil;
             [self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:sc_ExportError(@"Output already exists")]; return;
         }
-        // template：在目标所在文件系统上独占创建工作目录，避免共享目标的先检查后写入竞态。
-        char *template=strdup([[self.activeOutputURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:@".scmedia-XXXXXX"].path fileSystemRepresentation]);
-        if (!mkdtemp(template)) {
-            // directoryError：保留目录创建失败的系统原因。
-            NSError *directoryError=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
-            free(template); [self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:directoryError]; return;
+        // directoryError：创建同卷私有目录的真实系统错误。
+        NSError *directoryError = nil;
+        self.sc_outputFolder = sc_CreateOutputFolder(self.activeOutputURL, &directoryError);
+        if (!self.sc_outputFolder) {
+            [self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:directoryError];
+            return;
         }
-        self.sc_outputFolder=[NSURL fileURLWithFileSystemRepresentation:template isDirectory:YES relativeToURL:nil]; free(template);
-        self.activeOutputURL=[self.sc_outputFolder URLByAppendingPathComponent:self.sc_destinationURL.lastPathComponent];
+        self.activeOutputURL=[self.sc_outputFolder URLByAppendingPathComponent:destination.lastPathComponent];
         [self.asset loadValuesAsynchronouslyForKeys:@[ @"tracks", @"duration" ] completionHandler:^{
             dispatch_async(self.inputQueue, ^{
                 if (generation != self.generation || !self.runningSession) return;
@@ -142,7 +265,8 @@
 
 /// Live 的共享尺寸、质量和 HDR 以静态图配置为准；视频专属参数继续独立。
 - (void)sc_captureLivePhotoOptions {
-    if (!self.livePhoto && !sc_IsLivePhotoAsset(self.asset)) return;
+    self.sc_exportsLivePhoto = self.sc_configuration.livePhoto || sc_IsLivePhotoAsset(self.asset);
+    if (!self.sc_exportsLivePhoto) return;
     self.exportMaximumSize=self.exportLivePhotoImageOptions.maximumSize;
     // quality：只统一请求数值，不改变视频预算算法。
     double quality=self.exportLivePhotoImageOptions.quality;
@@ -156,18 +280,18 @@
     NSDictionary *colors=self.sc_exportPreservesHDR?sc_HDRVideoColorProperties(self.asset):nil;
     self.exportCodec=colors?AVVideoCodecTypeHEVC:AVVideoCodecTypeH264;
     // explicitCodec：高级设置不能绕过源动态范围与 HDR 开关决定的编码格式。
-    NSString *explicitCodec=self.videoOutputSettings[AVVideoCodecKey];
+    NSString *explicitCodec=self.sc_configuration.videoOutputSettings[AVVideoCodecKey];
     if(explicitCodec && ![explicitCodec isEqual:self.exportCodec])return sc_VideoConfigurationError(@"Explicit codec conflicts with source range: SDR uses H264; retained HDR uses HEVC");
     if (!self.sc_exportPreservesHDR) return nil;
     if (!colors) return [self.asset tracksWithMediaCharacteristic:AVMediaCharacteristicContainsHDRVideo].count ? sc_VideoConfigurationError(@"Unsupported source HDR color description") : nil;
-    if (![self.outputFileType isEqual:AVFileTypeMPEG4] && ![self.outputFileType isEqual:AVFileTypeQuickTimeMovie]) return sc_VideoConfigurationError(@"HDR video supports MP4 or MOV containers");
-    if (self.delegate || self.videoPixelBufferAdaptor || self.videoComposition.customVideoCompositorClass) return sc_VideoConfigurationError(@"HDR preservation does not support BGRA render delegates or custom compositors");
-    if (self.videoInputSettings && [self.videoInputSettings[(__bridge NSString *)kCVPixelBufferPixelFormatTypeKey]unsignedIntValue]!=kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange) return sc_VideoConfigurationError(@"HDR preservation requires 10-bit video-range pixel buffers");
+    if (![self.sc_configuration.outputFileType isEqual:AVFileTypeMPEG4] && ![self.sc_configuration.outputFileType isEqual:AVFileTypeQuickTimeMovie]) return sc_VideoConfigurationError(@"HDR video supports MP4 or MOV containers");
+    if (self.sc_configuration.delegate || self.videoPixelBufferAdaptor || self.sc_configuration.videoComposition.customVideoCompositorClass) return sc_VideoConfigurationError(@"HDR preservation does not support BGRA render delegates or custom compositors");
+    if (self.sc_configuration.videoInputSettings && [self.sc_configuration.videoInputSettings[(__bridge NSString *)kCVPixelBufferPixelFormatTypeKey]unsignedIntValue]!=kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange) return sc_VideoConfigurationError(@"HDR preservation requires 10-bit video-range pixel buffers");
     // profile：显式 8-bit 编码设置不能被静默覆盖。
-    NSString *profile=self.videoOutputSettings[AVVideoCompressionPropertiesKey][AVVideoProfileLevelKey];
+    NSString *profile=self.sc_configuration.videoOutputSettings[AVVideoCompressionPropertiesKey][AVVideoProfileLevelKey];
     if (profile && ![profile isEqual:@"HEVC_Main10_AutoLevel"]) return sc_VideoConfigurationError(@"HDR preservation requires the HEVC Main10 profile");
     // explicitColors：显式色彩必须与源 HDR 一致。
-    NSDictionary *explicitColors=self.videoOutputSettings[AVVideoColorPropertiesKey];
+    NSDictionary *explicitColors=self.sc_configuration.videoOutputSettings[AVVideoColorPropertiesKey];
     if (explicitColors && ![explicitColors isEqual:colors]) return sc_VideoConfigurationError(@"Explicit video color settings conflict with source HDR");
     self.sc_exportsHDR=YES;self.sc_exportColorProperties=colors;
     return nil;
@@ -183,7 +307,7 @@
     // format：输入编解码标识。
     CMFormatDescriptionRef format=(__bridge CMFormatDescriptionRef)track.formatDescriptions.firstObject;
     // targetCodec：实际请求的编码类型。
-    NSString *targetCodec=self.videoOutputSettings[AVVideoCodecKey] ?: self.exportCodec;
+    NSString *targetCodec=self.sc_configuration.videoOutputSettings[AVVideoCodecKey] ?: self.exportCodec;
     // requiresEncoding：特殊编码或 HDR 需要真实转换；普通几何压缩不单独生成基准。
     BOOL requiresEncoding=!format || CMFormatDescriptionGetMediaSubType(format)!=([targetCodec isEqual:AVVideoCodecTypeHEVC] ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264) || ([self.asset tracksWithMediaCharacteristic:AVMediaCharacteristicContainsHDRVideo].count>0 && !self.sc_exportsHDR);
     // audioTrack：非 AAC 音频必须预先转换为当前支持的音频格式。
@@ -200,21 +324,21 @@
         [self sc_startAttempt]; return;
     }
     // repack：仅变更容器/网络文件头，不解码和重编码视频；兼容容器仍以源文件为基准。
-    BOOL mp4=[self.outputFileType isEqual:AVFileTypeMPEG4];
+    BOOL mp4=[self.sc_configuration.outputFileType isEqual:AVFileTypeMPEG4];
     // prefix：识别真实容器标记，而不是仅相信扩展名。
     NSFileHandle *file=[NSFileHandle fileHandleForReadingFromURL:sourceURL error:nil];
     // prefix：文件头的真实主品牌字段。
     NSData *prefix=[file readDataOfLength:12]; [file closeFile];
     // brand：QuickTime 与 MP4 的主兼容品牌。
     NSString *brand=prefix.length==12 ? [[NSString alloc]initWithBytes:(const uint8_t *)prefix.bytes+8 length:4 encoding:NSASCIIStringEncoding] : nil;
-    if(((mp4 && [@[@"isom",@"iso2",@"mp41",@"mp42",@"avc1"]containsObject:brand]) || (!mp4 && [brand isEqual:@"qt  "])) && (!self.shouldOptimizeForNetworkUse || sc_HasFastStart(sourceURL))) {
+    if(((mp4 && [@[@"isom",@"iso2",@"mp41",@"mp42",@"avc1"]containsObject:brand]) || (!mp4 && [brand isEqual:@"qt  "])) && (!self.sc_configuration.shouldOptimizeForNetworkUse || sc_HasFastStart(sourceURL))) {
         self.sc_sourceBaselineURL=sourceURL; [self sc_startAttempt]; return;
     }
     // repackURL：生命周期仅属于本轮的无损容器转换结果。
     NSURL *repackURL=[self.activeOutputURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:mp4 ? @"mp4" : @"mov"]];
     self.sc_repackSession=[[AVAssetExportSession alloc]initWithAsset:self.asset presetName:AVAssetExportPresetPassthrough];
-    self.sc_repackSession.outputURL=repackURL; self.sc_repackSession.outputFileType=self.outputFileType;
-    self.sc_repackSession.shouldOptimizeForNetworkUse=self.shouldOptimizeForNetworkUse;
+    self.sc_repackSession.outputURL=repackURL; self.sc_repackSession.outputFileType=self.sc_configuration.outputFileType;
+    self.sc_repackSession.shouldOptimizeForNetworkUse=self.sc_configuration.shouldOptimizeForNetworkUse;
     self.sc_repackSession.metadata=[AVMetadataItem metadataItemsFromArray:self.asset.metadata filteredByIdentifier:AVMetadataIdentifierQuickTimeMetadataContentIdentifier];
     [self.sc_repackSession exportAsynchronouslyWithCompletionHandler:^{dispatch_async(self.inputQueue,^{
         if(self.generation!=generation || !self.runningSession) { [NSFileManager.defaultManager removeItemAtURL:repackURL error:nil]; return; }
@@ -223,7 +347,7 @@
         // error：保留系统转换错误用于终态报告。
         NSError *error=self.sc_repackSession.error; self.sc_repackSession=nil;
         if(!success) { [self sc_completeWithStatus:AVAssetExportSessionStatusFailed error:error ?: sc_ExportError(@"Required container conversion failed")]; return; }
-        self.sc_sourceBaselineURL=repackURL; self.usesConvertedBaseline=YES; self.conversionBytes=[NSFileManager.defaultManager attributesOfItemAtPath:repackURL.path error:nil].fileSize; [self sc_startAttempt];
+        self.sc_sourceBaselineURL=repackURL; self.sc_result.usesConvertedBaseline=YES; self.sc_result.conversionBytes=[NSFileManager.defaultManager attributesOfItemAtPath:repackURL.path error:nil].fileSize; [self sc_startAttempt];
     });}];
 }
 
@@ -231,8 +355,8 @@
 - (BOOL)sc_canReturnCompressionBaseline {
     if(!self.sc_sourceBaselineURL) return NO;
     if(self.sc_requiresEncodingConversion)return [self.sc_sourceBaselineURL isEqual:self.activeOutputURL];
-    if(self.shouldOptimizeForNetworkUse && !sc_HasFastStart(self.sc_sourceBaselineURL)) return NO;
-    if(self.delegate || self.videoPixelBufferAdaptor || self.videoComposition || self.audioMix || self.metadata || self.videoInputSettings || self.audioInputSettings || self.videoOutputSettings || self.audioOutputSettings || self.exportBitRate>0 || CMTimeCompare(self.exportRange.start,kCMTimeZero)!=0 || CMTimeCompare(self.exportRange.duration,self.asset.duration)!=0) return NO;
+    if(self.sc_configuration.shouldOptimizeForNetworkUse && !sc_HasFastStart(self.sc_sourceBaselineURL)) return NO;
+    if(self.sc_configuration.delegate || self.videoPixelBufferAdaptor || self.sc_configuration.videoComposition || self.sc_configuration.audioMix || self.sc_configuration.metadata || self.sc_configuration.videoInputSettings || self.sc_configuration.audioInputSettings || self.sc_configuration.videoOutputSettings || self.sc_configuration.audioOutputSettings || self.exportBitRate>0 || CMTimeCompare(self.exportRange.start,kCMTimeZero)!=0 || CMTimeCompare(self.exportRange.duration,self.asset.duration)!=0) return NO;
     // baseline：待回退文件的真实媒体描述。
     AVAsset *baseline=[AVAsset assetWithURL:self.sc_sourceBaselineURL];
     if([baseline tracksWithMediaType:AVMediaTypeVideo].count!=1 || [baseline tracksWithMediaType:AVMediaTypeAudio].count>1) return NO;
@@ -261,7 +385,7 @@
 - (AVAsset *)sc_processingAsset { return self.fullFrameAsset ?: self.asset; }
 
 - (BOOL)sc_canCopyAudioTrack:(AVAssetTrack *)track {
-    if (self.audioMix || self.audioInputSettings || self.audioOutputSettings ||
+    if (self.sc_configuration.audioMix || self.sc_configuration.audioInputSettings || self.sc_configuration.audioOutputSettings ||
         CMTimeCompare(self.exportRange.start, kCMTimeZero) != 0 ||
         CMTimeCompare(self.exportRange.duration, self.sc_processingAsset.duration) != 0 ||
         !isfinite(track.estimatedDataRate) || track.estimatedDataRate <= 0 ||
@@ -278,9 +402,7 @@
 }
 
 - (NSError *)sc_prepareFullFrameSource {
-    // live：是否按Live配对视频处理。
-    BOOL live = self.livePhoto || sc_IsLivePhotoAsset(self.asset);
-    if (!live || self.videoComposition || ![self.asset isKindOfClass:AVURLAsset.class]) return nil;
+    if (!self.sc_exportsLivePhoto || self.sc_configuration.videoComposition || ![self.asset isKindOfClass:AVURLAsset.class]) return nil;
     // sourceURL：原始URL。
     NSURL *sourceURL = [(AVURLAsset *)self.asset URL];
     if (!sourceURL.isFileURL) return nil;
@@ -330,12 +452,9 @@
 }
 - (void)sc_completeWithStatus:(AVAssetExportSessionStatus)status error:(NSError *)error {
     self.generation++;
-    if (status==AVAssetExportSessionStatusCompleted && self.sc_outputFolder) {
-        // identity：发布前保存实际写入文件的身份；link 不覆盖已存在的目标或符号链接。
-        NSDictionary *identity=[NSFileManager.defaultManager attributesOfItemAtPath:self.activeOutputURL.path error:nil];
-        if (link(self.activeOutputURL.fileSystemRepresentation,self.sc_destinationURL.fileSystemRepresentation)!=0) {
-            status=AVAssetExportSessionStatusFailed; error=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
-        } else self.sc_publishedIdentity=identity;
+    if (status == AVAssetExportSessionStatusCompleted && self.sc_outputFolder && !self.sc_configuration.defersPublication &&
+        !sc_PublishOutput(self.activeOutputURL, self.sc_result.outputURL, &error)) {
+        status = AVAssetExportSessionStatusFailed;
     }
     [self.sc_repackSession cancelExport]; self.sc_repackSession=nil;
     // now：当前唯一终态的计时终点。
@@ -346,58 +465,84 @@
     double compress=self.sc_compressionStartedAt ? (self.sc_compressionFinishedAt ?: now)-self.sc_compressionStartedAt : 0;
     // total：本次操作的完整耗时，不含调用方下载。
     double total=now-self.exportStartedAt;
-    self.stageDurations=@{@"prepare":@(MAX(0,prepare)),@"compress":@(MAX(0,compress)),@"finish":@(MAX(0,total-prepare-compress)),@"total":@(MAX(0,total))};
-    sc_log(@"[SCVideoCompressor][%@] passes=%lu stages=%@",self.logIdentifier,(unsigned long)self.encodingPassCount,self.stageDurations);
+    self.sc_result.stageDurations=@{@"prepare":@(MAX(0,prepare)),@"compress":@(MAX(0,compress)),@"finish":@(MAX(0,total-prepare-compress)),@"total":@(MAX(0,total))};
+    sc_log(@"[SCVideoCompressor][%@] passes=%lu stages=%@",self.logIdentifier,(unsigned long)self.sc_result.encodingPassCount,self.sc_result.stageDurations);
     // outputBytes：输出字节。
     NSNumber *outputBytes = status == AVAssetExportSessionStatusCompleted ? [NSFileManager.defaultManager attributesOfItemAtPath:self.activeOutputURL.path error:nil][NSFileSize] : nil;
     // saved：本次输出相对输入节省的字节比例。
-    NSString *saved = self.comparisonBytes && outputBytes ? [NSString stringWithFormat:@"%.2f%%", (1 - outputBytes.doubleValue / self.comparisonBytes) * 100] : @"n/a";
-    sc_log(@"[SCVideoCompressor][%@] comparisonBytes=%llu converted=%@",self.logIdentifier,self.comparisonBytes,self.usesConvertedBaseline ? @"yes" : @"no");
+    NSString *saved = self.sc_result.comparisonBytes && outputBytes ? [NSString stringWithFormat:@"%.2f%%", (1 - outputBytes.doubleValue / self.sc_result.comparisonBytes) * 100] : @"n/a";
+    sc_log(@"[SCVideoCompressor][%@] comparisonBytes=%llu converted=%@",self.logIdentifier,self.sc_result.comparisonBytes,self.sc_result.usesConvertedBaseline ? @"yes" : @"no");
     sc_log(@"[SCVideoCompressor][%@] after status=%@ inputBytes=%@ outputBytes=%@ outputKB=%@ outputMB=%@ saved=%@ elapsed=%.3fs", self.logIdentifier,
         sc_StatusName(status), self.inputFileBytes ? @(self.inputFileBytes) : @"unknown", outputBytes ?: @"unavailable", outputBytes ? [NSString stringWithFormat:@"%.2f", outputBytes.doubleValue / 1024.0] : @"n/a",
         outputBytes ? [NSString stringWithFormat:@"%.3f", outputBytes.doubleValue / (1024.0 * 1024.0)] : @"n/a", saved, CFAbsoluteTimeGetCurrent() - self.exportStartedAt);
     [self sc_releaseAttempt];self.sc_fidelityReferences=nil;
-    if(status!=AVAssetExportSessionStatusCompleted){self.fidelityScore=nil;self.qualityStatus=SCVideoQualityStatusNotEvaluated;self.qualitySampleCount=0;}
+    if(status!=AVAssetExportSessionStatusCompleted){self.sc_result.fidelityScore=nil;self.sc_result.qualityStatus=SCVideoQualityStatusNotEvaluated;self.sc_result.qualitySampleCount=0;}
     self.fullFrameAsset = nil;
     if (self.fullFrameSourceURL) [NSFileManager.defaultManager removeItemAtURL:self.fullFrameSourceURL error:nil];
     self.fullFrameSourceURL = nil;
-    self.exportError = error;
-    self.status = status;
-    if (status == AVAssetExportSessionStatusCompleted) self.progress = 1;
+    self.sc_result.error = error;
+    if (status == AVAssetExportSessionStatusCompleted) [self sc_setProgress:1];
     // 只删除独占目录，不根据最终路径是否存在推断所有权。
-    if (self.sc_outputFolder) [NSFileManager.defaultManager removeItemAtURL:self.sc_outputFolder error:nil];
-    self.sc_outputFolder=nil;
-    // handler：当前阶段的回调快照。
-    void (^handler)(void) = self.completionHandler;
-    self.completionHandler = nil;
-    self.runningSession = nil;
-    if (handler) { if (self.callbackQueue) dispatch_async(self.callbackQueue, handler); else handler(); }
-}
-
-/// 高层在交付前取消时仅移除仍属于本轮的发布文件。
-- (void)sc_removePublishedOutput {
-    // current：目标可能已被调用方替换，核对设备号和 inode 后才允许清理。
-    NSDictionary *current=[NSFileManager.defaultManager attributesOfItemAtPath:self.sc_destinationURL.path error:nil];
-    if (self.sc_publishedIdentity && [current[NSFileSystemNumber]isEqual:self.sc_publishedIdentity[NSFileSystemNumber]] && [current[NSFileSystemFileNumber]isEqual:self.sc_publishedIdentity[NSFileSystemFileNumber]]) {
-        [NSFileManager.defaultManager removeItemAtURL:self.sc_destinationURL error:nil];
+    if (status == AVAssetExportSessionStatusCompleted && self.sc_configuration.defersPublication) {
+        self.sc_result.stagedFolder = self.sc_outputFolder;
+        self.sc_result.stagedFile = self.activeOutputURL;
+    } else if (self.sc_outputFolder) {
+        [NSFileManager.defaultManager removeItemAtURL:self.sc_outputFolder error:nil];
     }
+    self.sc_outputFolder = nil;
+    [self sc_setStatus:status];
+    // handler：本轮唯一的完成回调。
+    dispatch_block_t handler = self.completionHandler;
+    // result：与后续轮次分离的终态对象。
+    SCVideoExportResult *result = self.sc_result;
+    // delivery：先交付本轮之前入队的进度，再交付完成。
+    dispatch_queue_t delivery = self.sc_deliveryQueue;
+    // configuredQueue：自定义队列直接负责回调，默认完成返回导出队列。
+    BOOL configuredQueue = self.sc_hasCallbackQueue;
+    self.sc_deliveryQueue = nil;
+    self.sc_exportProgressHandler = nil;
+    self.completionHandler = nil;
+    self.sc_configuration = nil;
+    self.runningSession = nil;
+    if (!handler) return;
+
+    // complete：即使内部已开始下一轮，回调仍读取它自己的结果。
+    dispatch_block_t complete = ^{ [self sc_deliverResult:result handler:handler]; };
+    if (configuredQueue) dispatch_async(delivery, complete);
+    else if (delivery) dispatch_async(delivery, ^{ dispatch_async(self.inputQueue, complete); });
+    else complete();
 }
 
-- (float)sc_progress { @synchronized(self) { return _progress; } }
+/// 终态锁定后提交高层视频，只清理与该次结果绑定的目录。
+- (BOOL (^)(BOOL, NSError **))sc_deferredPublication {
+    // result：捕获当前完成块所属的轮次，允许在主队列交付。
+    SCVideoExportResult *result = self.sc_callbackResult;
+    // deliver、error：终态是否交付，以及实际文件系统错误。
+    return ^BOOL(BOOL deliver, NSError **error) {
+        // success：链接失败时保留目标和真实系统错误。
+        BOOL success = deliver && sc_PublishOutput(result.stagedFile, result.outputURL, error);
+        if (result.stagedFolder) [NSFileManager.defaultManager removeItemAtURL:result.stagedFolder error:nil];
+        result.stagedFolder = nil;
+        result.stagedFile = nil;
+        return success;
+    };
+}
 
+/// 状态 KVO 仍由导出队列发布。
+- (void)sc_setStatus:(AVAssetExportSessionStatus)status {
+    [self willChangeValueForKey:@"status"];
+    self.sc_result.status = status;
+    [self didChangeValueForKey:@"status"];
+}
+
+/// 进度由导出队列发布，调用者回调由本轮串行交付队列执行。
 - (void)sc_setProgress:(float)progress {
     [self willChangeValueForKey:@"progress"];
-    @synchronized(self) { _progress = progress; }
+    self.sc_result.progress = progress;
     [self didChangeValueForKey:@"progress"];
-    if (self.progressHandler) {
-        // callback：回调。
-        void (^callback)(float) = self.progressHandler;
-        dispatch_async(self.callbackQueue ?: dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ callback(progress); });
-    }
-}
-
-- (NSError *)sc_error {
-    return self.exportError;
+    // callback：本轮固定的接收器，后台修改下一轮配置不会替换它。
+    void (^callback)(float) = self.sc_exportProgressHandler;
+    if (callback) dispatch_async(self.sc_deliveryQueue, ^{ callback(progress); });
 }
 
 - (void)sc_cancelExport {
@@ -406,11 +551,18 @@
     });
 }
 
-/// Default video is bounded at 1280; paired Live video independently preserves up to 1920.
+/// 导出时复用本轮检测结果，编码预算探针仍可以在导出前查询默认策略。
+- (BOOL)sc_usesLivePhotoGeometry {
+    return self.runningSession ? self.sc_exportsLivePhoto : (self.livePhoto || sc_IsLivePhotoAsset(self.asset));
+}
+
+/// 普通视频和 Live 按各自配置限制实际显示尺寸。
 - (CGSize)sc_formatTargetSize:(CGSize)targetSize {
     // Restoring a camera Live Photo's complete encoded aperture is for composition only.
     // Bound the full frame by the ORIGINAL displayed width/height so normalization cannot upscale output.
-    if ((self.livePhoto || sc_IsLivePhotoAsset(self.sc_processingAsset)) && targetSize.width > 0 && targetSize.height > 0) {
+    // live：导出期间复用捕获的检测结果，独立查询仍根据当前配置计算。
+    BOOL live = [self sc_usesLivePhotoGeometry];
+    if (live && targetSize.width > 0 && targetSize.height > 0) {
         // original：原始资源。
         AVAssetTrack *original = [self.asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
         // bounds：边界。
@@ -426,7 +578,7 @@
     }
     if (!isfinite(targetSize.width) || !isfinite(targetSize.height) || targetSize.width < 2 || targetSize.height < 2) return CGSizeZero;
     //尺寸过大才压缩，否则不更改targetSize
-    CGSize limits = (self.livePhoto || sc_IsLivePhotoAsset(self.sc_processingAsset)) ? (self.exportLivePhotoImageOptions ?: self.livePhotoImageOptions).maximumSize : (self.runningSession ? self.exportMaximumSize : self.maximumSize);
+    CGSize limits = self.runningSession ? self.exportMaximumSize : (live ? self.livePhotoImageOptions.maximumSize : self.maximumSize);
     if (!isfinite(limits.width) || !isfinite(limits.height) || limits.width < 0 || limits.height < 0) return CGSizeZero;
     // multiple：源尺寸相对配置的缩小倍数。
     double multiple = MAX(limits.width > 0 ? targetSize.width / limits.width : 0,
@@ -473,7 +625,7 @@
     // bitRate：比特速率。
     NSInteger bitRate = numPixels * bitsPerPixel;
     // livePixels：Live像素缓冲。
-    double livePixels = (self.livePhoto || sc_IsLivePhotoAsset(self.sc_processingAsset)) ? MAX(1, numPixels/(1280.0*720)) : 1;
+    double livePixels = [self sc_usesLivePhotoGeometry] ? MAX(1, numPixels/(1280.0*720)) : 1;
     bitRate = MIN(bitRate, sc_MaximumVideoBitRate * livePixels);
     // quality：质量。
     double quality = self.runningSession ? self.exportVideoQuality : self.videoQuality;
@@ -575,7 +727,7 @@
     // SDR 使用 NV12；业务渲染和 HDR 转 SDR 保留原 BGRA 路径；保留 HDR 使用 10-bit。
     NSDictionary *videoInputSetting = @{
         (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey :
-            [NSNumber numberWithUnsignedInt:self.sc_exportsHDR ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : ((self.delegate||[self.sc_processingAsset tracksWithMediaCharacteristic:AVMediaCharacteristicContainsHDRVideo].count) ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)]
+            [NSNumber numberWithUnsignedInt:self.sc_exportsHDR ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : ((self.sc_configuration.delegate||[self.sc_processingAsset tracksWithMediaCharacteristic:AVMediaCharacteristicContainsHDRVideo].count) ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)]
     };
     return videoInputSetting;
 }

@@ -49,7 +49,7 @@ void sc_example(NSData *data, AVAsset *asset, NSURL *imageURL, NSURL *videoURL, 
         // SDR 源始终 H264；HDR 源开启 preservesHDR 后自动使用 HEVC Main10。
         // MOV 使用 AVFileTypeQuickTimeMovie，并把 output 扩展名改为 .mov；Live 最终固定 MOV。
     } progress:nil completion:^(NSURL *url,NSError *error){
-        // url：成功输出；error：失败原因；抽样数为 0 且评分为 1 表示原内容回退。
+        // url：成功输出已完成原子发布；error：失败原因；抽样数为 0 且评分为 1 表示原内容回退。
         if(url)NSLog(@"video outcome saved=%@ encodes=%lu score=%@",videoTask.outcome.savedRatio,(unsigned long)videoTask.outcome.videoEncodingPassCount,videoTask.outcome.videoFidelityScore);
         videoTask=nil;
     }];

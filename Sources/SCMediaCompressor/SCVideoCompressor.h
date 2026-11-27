@@ -16,7 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 /// H264/HEVC 视频导出器，默认 SDR，可显式保留 HEVC 的 HLG/PQ HDR。无第三方运行时依赖；一份实例可顺序复用。
-/// 导出前配置参数；开始时快照尺寸、质量、格式等默认编码配置。运行时不要修改配置。
+/// 导出入口捕获本轮配置。同一实例可为下一轮设置参数并再次调用导出入口。
 /// 真实候选抽样或原内容回退的保真状态，不把码率预算当作评分。
 typedef NS_ENUM(NSInteger, SCVideoQualityStatus) {
     SCVideoQualityStatusNotEvaluated=0, ///< 没有完整有效抽样或任务失败。
@@ -73,7 +73,7 @@ typedef NS_ENUM(NSInteger, SCVideoQualityStatus) {
 @property (nonatomic) BOOL shouldOptimizeForNetworkUse;
 /// 可选回调队列；nil 时完成回调在导出工作队列，进度在全局工作队列。
 @property (nonatomic, strong, nullable) dispatch_queue_t callbackQueue;
-/// 可选单调进度回调，范围 0…1；完成、失败或取消只产生一次终态回调。
+/// 可选单调进度回调，范围 0…1；每轮进度串行交付，完成回调在本轮进度之后。
 @property (nonatomic, copy, nullable) void (^progressHandler)(float progress);
 /// 实际比较基线：原文件或必要转换的实际结果；无原文件素材为 0。
 /// 候选严格更小时采用，否则返回合规基线；转换允许比源文件大。
@@ -99,7 +99,7 @@ typedef NS_ENUM(NSInteger, SCVideoQualityStatus) {
 /// @param asset 需要导出的视频素材。
 - (instancetype)sc_initWithAsset:(AVAsset *)asset __attribute__((objc_method_family(init)));
 /// 异步开始导出，重复使用正在运行的实例会先取消上一轮。
-/// @param handler 唯一终态回调；通过 status、error 与 outputURL 读取结果。
+/// @param handler 本轮唯一终态回调；在回调内读取的 status、error、outputURL 和诊断均属于本轮。
 - (void)sc_exportAsynchronouslyWithCompletionHandler:(void (^)(void))handler;
 /// 请求取消当前导出，清理本次临时文件与未完成输出，不删除源文件。
 - (void)sc_cancelExport;
